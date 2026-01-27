@@ -25,9 +25,11 @@ fn void log_alloc(char[] alloc, String name = "unknown")
 
 fn int main(String[] args)
 {
-	ArenaAlloc arena;
-	arena.init(mem);
-	defer arena.destroy();
+	ArenaAlloc _arena;
+	_arena.init(mem);
+	defer _arena.destroy();
+
+	Allocator arena = &_arena;
 
 	{
 		char[] mem1 = arena.acquire(600, NO_ZERO)!![:600];
@@ -36,11 +38,11 @@ fn int main(String[] args)
 	}
 
 	{
-		arena.ensure_capacity(1000);
-		ArenaSnapshot snap = arena.create_snapshot();
-		defer arena.rewind_snapshot(snap);
+		_arena.ensure_capacity(1000);
+		ArenaSnapshot snap = _arena.create_snapshot();
+		defer _arena.rewind_snapshot(snap);
 
-		char[] mem1 = arena.acquire(100, NO_ZERO)!![:100];
+		char[] mem1 = _arena.acquire(100, NO_ZERO)!![:100];
 		fill_alloc(mem1);
 		log_alloc(mem1, "mem1");
 
@@ -57,13 +59,15 @@ fn int main(String[] args)
 		log_alloc(mem4, "mem4");
 	}
 
-	exmp_1(&arena);
+	exmp_1(arena);
 
 	return 0;
 }
 
-fn void exmp_1(ArenaAlloc* arena)
+fn void exmp_1(Allocator arena)
 {
+	ArenaAlloc* _arena = (ArenaAlloc*)arena;
+
 	char[] mem1 = arena.acquire(800, NO_ZERO)!![:800];
 	fill_alloc(mem1);
 	log_alloc(mem1, "mem1");
@@ -86,7 +90,7 @@ fn void exmp_1(ArenaAlloc* arena)
 	fill_alloc(mem1);
 	log_alloc(mem1, "mem1, #2");
 
-	arena.ensure_capacity(3600);
+	_arena.ensure_capacity(3600);
 	mem2 = arena.resize(mem2.ptr, 3600)!![:3600];
 	fill_alloc(mem2);
 	log_alloc(mem2, "mem2, #3");

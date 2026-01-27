@@ -19,7 +19,7 @@ struct ArenaSnapshot
 	uint cursor;
 }
 
-struct ArenaAlloc
+struct ArenaAlloc (Allocator)
 {
 	List{ArenaRegion} 	regions;
 	Allocator			backing_alloc;
@@ -62,7 +62,7 @@ fn void ArenaAlloc.init(
 	@require size > 0 : "The size must be 1 or more"
 	@return? mem::INVALID_ALLOC_SIZE, mem::OUT_OF_MEMORY
 *>
-fn void*? ArenaAlloc.acquire(&arena, usz size, AllocInitType init_type, usz alignment = 0)
+fn void*? ArenaAlloc.acquire(&arena, usz size, AllocInitType init_type, usz alignment = 0) @dynamic
 {
 	alignment = allocator::alignment_for_allocation(alignment);
 	usz aligned_size_with_header = mem::aligned_offset(size + allocator::DEFAULT_SIZE_PREFIX, alignment);
@@ -96,7 +96,7 @@ fn void*? ArenaAlloc.acquire(&arena, usz size, AllocInitType init_type, usz alig
 	@require new_size > 0
 	@return? mem::INVALID_ALLOC_SIZE, mem::OUT_OF_MEMORY
 *>
-fn void*? ArenaAlloc.resize(&arena, void* ptr, usz new_size, usz alignment = 0)
+fn void*? ArenaAlloc.resize(&arena, void* ptr, usz new_size, usz alignment = 0) @dynamic
 {
 	alignment = allocator::alignment_for_allocation(alignment);
 	usz aligned_new_size_with_header = mem::aligned_offset(new_size + allocator::DEFAULT_SIZE_PREFIX, alignment);
@@ -144,7 +144,7 @@ fn void*? ArenaAlloc.resize(&arena, void* ptr, usz new_size, usz alignment = 0)
 
 	@require ptr != null : "Empty pointers should never be released"
 *>
-fn void ArenaAlloc.release(&arena, void* ptr, bool aligned)
+fn void ArenaAlloc.release(&arena, void* ptr, bool aligned) @dynamic
 {
 	ArenaRegion* reg = null;
 	
