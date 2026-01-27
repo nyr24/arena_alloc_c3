@@ -133,10 +133,14 @@ fn void*? ArenaAlloc.resize(&arena, void* ptr, usz new_size, usz alignment = 0) 
 	// if allocation was NOT last one in this region
 	bool enough_place_at_end = aligned_new_size_with_header <= (reg.data.len - reg.cursor);
 	if (enough_place_at_end) {
-		return arena.finalize_alloc(reg, aligned_new_size, reg_ind);
+		void* ret = arena.finalize_alloc(reg, aligned_new_size, reg_ind);
+		mem::copy((char*)ret, (char*)ptr, math::min(*old_size, new_size));
+		return ret;
 	}
 
-	return arena.acquire(aligned_new_size, arena.alloc_init_type, alignment);
+	void* ret = arena.acquire(aligned_new_size, arena.alloc_init_type, alignment);
+	mem::copy((char*)ret, (char*)ptr, math::min(*old_size, new_size));
+	return ret;
 }
 
 <*
