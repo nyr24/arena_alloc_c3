@@ -5,7 +5,7 @@ module arena_alloc;
 import std::math;
 import std::collections::list;
 
-const usz MIN_REGION_SIZE = 1024u;
+const usz DEFAULT_REGION_SIZE = 1024u;
 
 struct ArenaRegion
 {
@@ -26,14 +26,28 @@ struct ArenaAlloc
 	AllocInitType		alloc_init_type;
 	uint 				last_region_ind;
 	uint				snapshot_count;
+	uint				min_region_size;
 }
 
-fn void ArenaAlloc.init(&arena, Allocator backing_alloc, usz init_region_count, usz init_first_region_size = 0, AllocInitType alloc_init_type = AllocInitType.NO_ZERO)
+<*
+	Initializes the arena.
+
+	@require init_region_capacity >= 1 : "Should be at least one"
+*>
+fn void ArenaAlloc.init(
+	&arena,
+	Allocator backing_alloc,
+	usz init_region_capacity = 1,
+	uint min_region_size = DEFAULT_REGION_SIZE,
+	uint init_first_region_size = 0,
+	AllocInitType alloc_init_type = NO_ZERO
+)
 {
 	arena.backing_alloc = backing_alloc;
 	arena.last_region_ind = 0;
 	arena.alloc_init_type = alloc_init_type;
-	arena.regions.init(backing_alloc, init_region_count);
+	arena.min_region_size = min_region_size;
+	arena.regions.init(backing_alloc, init_region_capacity);
 
 	if (init_first_region_size != 0) {
 		arena.push_region(init_first_region_size);
@@ -41,12 +55,12 @@ fn void ArenaAlloc.init(&arena, Allocator backing_alloc, usz init_region_count, 
 }
 
 <*
- Acquire memory from the allocator, with the given alignment and initialization type.
+	Acquire memory from the allocator, with the given alignment and initialization type.
 
- @require !alignment || math::is_power_of_2(alignment)
- @require alignment <= mem::MAX_MEMORY_ALIGNMENT : `alignment too big`
- @require size > 0 : "The size must be 1 or more"
- @return? mem::INVALID_ALLOC_SIZE, mem::OUT_OF_MEMORY
+	@require !alignment || math::is_power_of_2(alignment)
+	@require alignment <= mem::MAX_MEMORY_ALIGNMENT : `alignment too big`
+	@require size > 0 : "The size must be 1 or more"
+	@return? mem::INVALID_ALLOC_SIZE, mem::OUT_OF_MEMORY
 *>
 fn void*? ArenaAlloc.acquire(&arena, usz size, AllocInitType init_type, usz alignment = 0)
 {
@@ -74,13 +88,13 @@ fn void*? ArenaAlloc.acquire(&arena, usz size, AllocInitType init_type, usz alig
 }
 
 <*
- Resize acquired memory from the allocator, with the given new size and alignment.
+	Resize acquired memory from the allocator, with the given new size and alignment.
 
- @require !alignment || math::is_power_of_2(alignment)
- @require alignment <= mem::MAX_MEMORY_ALIGNMENT : `alignment too big`
- @require ptr != null
- @require new_size > 0
- @return? mem::INVALID_ALLOC_SIZE, mem::OUT_OF_MEMORY
+	@require !alignment || math::is_power_of_2(alignment)
+	@require alignment <= mem::MAX_MEMORY_ALIGNMENT : `alignment too big`
+	@require ptr != null
+	@require new_size > 0
+	@return? mem::INVALID_ALLOC_SIZE, mem::OUT_OF_MEMORY
 *>
 fn void*? ArenaAlloc.resize(&arena, void* ptr, usz new_size, usz alignment = 0)
 {
@@ -122,16 +136,13 @@ fn void*? ArenaAlloc.resize(&arena, void* ptr, usz new_size, usz alignment = 0)
 		return arena.finalize_alloc(reg, aligned_new_size, reg_ind);
 	}
 
-	// allocate new region for this allocation
-	arena.push_region(aligned_new_size_with_header);
-	reg = &arena.regions[arena.regions.size - 1];
-	return arena.finalize_alloc(reg, aligned_new_size, (uint)(arena.regions.size - 1));
+	return arena.acquire(aligned_new_size, arena.alloc_init_type, alignment);
 }
 
 <*
- Release memory acquired using `acquire` or `resize`.
+	Release memory acquired using `acquire` or `resize`.
 
- @require ptr != null : "Empty pointers should never be released"
+	@require ptr != null : "Empty pointers should never be released"
 *>
 fn void ArenaAlloc.release(&arena, void* ptr, bool aligned)
 {
@@ -155,6 +166,13 @@ fn void ArenaAlloc.release(&arena, void* ptr, bool aligned)
 	reg.cursor -= (uint)(*alloc_size + allocator::DEFAULT_SIZE_PREFIX);
 }
 
+<*
+	Ensure that arena has contiguous memory space of size 'cap'
+
+	Use case for this: you know that you will have 'n' small allocations
+	and you don't want to preallocate all the space for them in 'acquire' call,
+	but made them as separate ones, still preserving opportunity for storing them in a single Region
+*>
 fn void ArenaAlloc.ensure_capacity(&arena, usz cap)
 {
 	usz alignment = mem::DEFAULT_MEM_ALIGNMENT;
@@ -177,6 +195,10 @@ fn void ArenaAlloc.ensure_capacity(&arena, usz cap)
 	}
 }
 
+<*
+	Create a 'mark' from which you can start doing temporary allocations,
+	then easily reclaim them back with 'rewind_snapshot'
+*>
 fn ArenaSnapshot ArenaAlloc.create_snapshot(&arena)
 {
 	ArenaSnapshot snap;
@@ -186,10 +208,16 @@ fn ArenaSnapshot ArenaAlloc.create_snapshot(&arena)
 	return snap;
 }
 
-fn void ArenaAlloc.rewind_snapshot(&arena, ArenaSnapshot* snapshot)
+<*
+	Reclaim all memory used since a call to 'create_snapshot'
+*>
+fn void ArenaAlloc.rewind_snapshot(&arena, ArenaSnapshot snapshot)
 {
-	arena.last_region_ind = snapshot.region;
+	for (int i = arena.last_region_ind; i > snapshot.region; --i) {
+		arena.regions[i].cursor = 0; 
+	}
 	arena.regions[snapshot.region].cursor = snapshot.cursor; 
+	arena.last_region_ind = snapshot.region;
 	arena.snapshot_count--;
 }
 
@@ -199,8 +227,10 @@ fn bool ArenaRegion.is_last_alloc(&reg, void* ptr, usz alloc_size) @inline @loca
 	return alloc_cursor == reg.cursor;
 }
 
-// inserts allocation after region.cursor
-// aligned_size - allocation size without header
+<*
+	Inserts allocation after region.cursor
+	aligned_size - allocation size without header
+*>
 fn void* ArenaAlloc.finalize_alloc(&arena, ArenaRegion* reg, usz aligned_size, uint reg_ind) @inline @local
 {
 	void* ret = reg.data.ptr + reg.cursor + allocator::DEFAULT_SIZE_PREFIX;
@@ -213,21 +243,72 @@ fn void* ArenaAlloc.finalize_alloc(&arena, ArenaRegion* reg, usz aligned_size, u
 
 fn void ArenaAlloc.push_region(&arena, usz size) @inline @local
 {
-	arena.regions.push(create_region(arena.backing_alloc, size, arena.alloc_init_type));
+	arena.regions.push(arena.create_region(size));
 }
 
-fn ArenaRegion create_region(Allocator backing_alloc, usz size, AllocInitType alloc_init_type = AllocInitType.NO_ZERO) @local
+<*
+	Set the size that will be used as 'min' capacity boundary for newly created arena region
+*>
+fn void ArenaAlloc.set_min_region_size(&arena, uint min_size) @inline
+{
+	arena.min_region_size = min_size;
+}
+
+<*
+	Caution! it may break your snapshot state
+*>
+fn void ArenaAlloc.set_force_append_at_end(&arena) @inline
+{
+	if (arena.snapshot_count == 0) {
+		arena.snapshot_count = 1;
+	}
+}
+
+<*
+	Caution! it may break your snapshot state
+	don't use this if you have snapshots at the time of call
+*>
+fn void ArenaAlloc.unset_force_append_at_end(&arena) @inline
+{
+	if (arena.snapshot_count > 0) {
+		arena.snapshot_count = 0;
+	}
+}
+
+<*
+	Reclaim all used memory, allowing to use it freely again
+*>
+fn void ArenaAlloc.reset(&arena)
+{
+	foreach (&reg : arena.regions) {
+		reg.cursor = 0;
+	}
+}
+
+<*
+	Destroy all the memory storage of arena and return it to OS
+*>
+fn void ArenaAlloc.destroy(&arena)
+{
+	foreach (&reg : arena.regions) {
+		reg.cursor = 0;
+		allocator::free(arena.backing_alloc, reg.data.ptr);
+	}
+	arena.regions.free();
+}
+
+fn ArenaRegion ArenaAlloc.create_region(&arena, usz size) @local
 {
 	ArenaRegion reg;
-	if (alloc_init_type == AllocInitType.ZERO) {
-		reg.data = allocator::new_array(backing_alloc, char, math::max(size, MIN_REGION_SIZE));
+	if (arena.alloc_init_type == AllocInitType.ZERO) {
+		reg.data = allocator::new_array(arena.backing_alloc, char, math::max(size, (usz)arena.min_region_size));
 	} else {
-		reg.data = allocator::alloc_array(backing_alloc, char, math::max(size, MIN_REGION_SIZE));
+		reg.data = allocator::alloc_array(arena.backing_alloc, char, math::max(size, (usz)arena.min_region_size));
 	}
 	return reg;
 }
 
-fn bool ArenaRegion.owns_ptr(&reg, void* ptr)
+fn bool ArenaRegion.owns_ptr(&reg, void* ptr) @inline @local
 {
 	return (uptr)ptr >= (uptr)reg.data.ptr && (uptr)ptr < (uptr)reg.data.ptr + reg.data.len;
 }
