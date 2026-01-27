@@ -1,4 +1,4 @@
-module arena_alloc;
+module arena;
 
 // Individual allocation structure: [size=8bytes|payload|padding]
 

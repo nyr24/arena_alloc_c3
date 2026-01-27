@@ -1,4 +1,4 @@
-module arena_alloc;
+module arena;
 
 import std::io;
 import std::math::random;
