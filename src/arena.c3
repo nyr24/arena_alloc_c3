@@ -7,6 +7,8 @@ import std::collections::list;
 
 const usz DEFAULT_REGION_SIZE = 1024u;
 
+faultdef PTR_NOT_OWNED;
+
 struct ArenaRegion
 {
 	char[] data;
@@ -94,7 +96,7 @@ fn void*? ArenaAlloc.acquire(&arena, usz size, AllocInitType init_type, usz alig
 	@require alignment <= mem::MAX_MEMORY_ALIGNMENT : `alignment too big`
 	@require ptr != null
 	@require new_size > 0
-	@return? mem::INVALID_ALLOC_SIZE, mem::OUT_OF_MEMORY
+	@return? mem::INVALID_ALLOC_SIZE, mem::OUT_OF_MEMORY, PTR_NOT_OWNED
 *>
 fn void*? ArenaAlloc.resize(&arena, void* ptr, usz new_size, usz alignment = 0) @dynamic
 {
@@ -113,7 +115,7 @@ fn void*? ArenaAlloc.resize(&arena, void* ptr, usz new_size, usz alignment = 0) 
 	}
 
 	if (!reg) {
-		return null;
+		return PTR_NOT_OWNED~;
 	}
 
 	usz* old_size = (usz*)(ptr - allocator::DEFAULT_SIZE_PREFIX);
@@ -138,7 +140,10 @@ fn void*? ArenaAlloc.resize(&arena, void* ptr, usz new_size, usz alignment = 0) 
 		return ret;
 	}
 
-	void* ret = arena.acquire(aligned_new_size, arena.alloc_init_type, alignment);
+	void*? ret = arena.acquire(aligned_new_size, arena.alloc_init_type, alignment);
+	if (catch excuse = ret) {
+		return excuse~;
+	}
 	mem::copy((char*)ret, (char*)ptr, math::min(*old_size, new_size));
 	return ret;
 }
