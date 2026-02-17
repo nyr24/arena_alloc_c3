@@ -5,15 +5,15 @@
   "authors": [ "nyr24" ],
   "version": "0.1.0",
   "sources": [ "src/**" ],
-  "test-sources": [ "test/**" ],
+  "test-sources": [ "src/**" ],
   "build-dir": "build",
   "output": "build",
   "targets": {
     "arena_alloc": {
       "type": "static-lib",
     },
-    "test": {
-      "type": "executable",
+    "arena_alloc_dyn": {
+      "type": "dynamic-lib",
     },
   },
   "cpu": "generic",

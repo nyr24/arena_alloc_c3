@@ -23,7 +23,7 @@ fn void log_alloc(char[] alloc, String name = "unknown")
 	io::printn();
 }
 
-fn int main(String[] args)
+fn void main_test() @test
 {
 	ArenaAlloc _arena;
 	_arena.init(mem);
@@ -60,8 +60,6 @@ fn int main(String[] args)
 	}
 
 	exmp_1(arena);
-
-	return 0;
 }
 
 fn void exmp_1(Allocator arena)
