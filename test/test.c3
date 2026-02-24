@@ -25,46 +25,55 @@ fn void log_alloc(char[] alloc, String name = "unknown")
 
 fn void main_test() @test
 {
-	ArenaAlloc _arena;
-	_arena.init(mem);
-	defer _arena.destroy();
+	ArenaAlloc arena;
+	arena.init(mem);
+	defer arena.destroy();
 
-	Allocator arena = &_arena;
+	const EXAMPLE_1 = false;
+	const EXAMPLE_ENSURE = false;
+	const EXAMPLE_TEMP_SCOPE = true;
 
-	{
-		char[] mem1 = arena.acquire(600, NO_ZERO)!![:600];
-		fill_alloc(mem1);
-		log_alloc(mem1, "mem1");
+	if (EXAMPLE_1) {
+		example_1(&arena);
 	}
 
-	{
-		_arena.ensure_capacity(1000);
-		ArenaSnapshot snap = _arena.create_snapshot();
-		defer _arena.rewind_snapshot(snap);
+	if (EXAMPLE_ENSURE) {
+		example_ensure(&arena);
+	}
 
-		char[] mem1 = _arena.acquire(100, NO_ZERO)!![:100];
+	if (EXAMPLE_TEMP_SCOPE) {
+		example_temp_scope(&arena);
+	}
+}
+
+fn void example_temp_scope(ArenaAlloc* _arena)
+{
+	_arena.ensure_capacity(1000);
+
+	_arena.@temp_scope() {
+		Allocator arena = _arena;
+
+		char[] mem1 = allocator::alloc_array(arena, char, 200);
 		fill_alloc(mem1);
 		log_alloc(mem1, "mem1");
 
-		char[] mem2 = arena.acquire(500, NO_ZERO)!![:500];
+		char[] mem2 = allocator::alloc_array(arena, char, 200);
 		fill_alloc(mem2);
 		log_alloc(mem2, "mem2");
 
-		char[] mem3 = arena.acquire(700, NO_ZERO)!![:700];
+		char[] mem3 = allocator::alloc_array(arena, char, 200);
 		fill_alloc(mem3);
 		log_alloc(mem3, "mem3");
 
-		char[] mem4 = arena.acquire(800, NO_ZERO)!![:800];
+		char[] mem4 = allocator::alloc_array(arena, char, 200);
 		fill_alloc(mem4);
 		log_alloc(mem4, "mem4");
-	}
-
-	exmp_1(arena);
+	};
 }
 
-fn void exmp_1(Allocator arena)
+fn void example_1(ArenaAlloc* _arena)
 {
-	ArenaAlloc* _arena = (ArenaAlloc*)arena;
+	Allocator arena = _arena;
 
 	char[] mem1 = arena.acquire(800, NO_ZERO)!![:800];
 	fill_alloc(mem1);
@@ -92,4 +101,28 @@ fn void exmp_1(Allocator arena)
 	mem2 = arena.resize(mem2.ptr, 3600)!![:3600];
 	fill_alloc(mem2);
 	log_alloc(mem2, "mem2, #3");
+}
+
+fn void example_ensure(ArenaAlloc* _arena)
+{
+	Allocator arena = _arena;
+	_arena.ensure_capacity(1000);
+	ArenaSnapshot snap = _arena.create_snapshot();
+	defer _arena.rewind_snapshot(snap);
+
+	char[] mem1 = allocator::alloc_array(arena, char, 100);
+	fill_alloc(mem1);
+	log_alloc(mem1, "mem1");
+
+	char[] mem2 = allocator::alloc_array(arena, char, 500);
+	fill_alloc(mem2);
+	log_alloc(mem2, "mem2");
+
+	char[] mem3 = allocator::alloc_array(arena, char, 700);
+	fill_alloc(mem3);
+	log_alloc(mem3, "mem3");
+
+	char[] mem4 = allocator::alloc_array(arena, char, 800);
+	fill_alloc(mem4);
+	log_alloc(mem4, "mem4");
 }

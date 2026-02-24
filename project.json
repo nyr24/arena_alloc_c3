@@ -5,7 +5,7 @@
   "authors": [ "nyr24" ],
   "version": "0.1.0",
   "sources": [ "src/**" ],
-  "test-sources": [ "src/**" ],
+  "test-sources": [ "test/**" ],
   "build-dir": "build",
   "output": "build",
   "targets": {
