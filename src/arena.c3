@@ -251,7 +251,7 @@ fn void* finalize_alloc(ArenaAlloc* arena, ArenaRegion* reg, usz aligned_size, u
 	return ret;
 }
 
-fn uint ArenaAlloc.push_region(&arena, usz size) @inline @local
+fn uint ArenaAlloc.push_region(&arena, usz size) @inline
 {
 	arena.regions.push(create_region(arena, size));
 	arena.last_region_ind = math::max(arena.last_region_ind, (uint)(arena.regions.size - 1));
@@ -288,7 +288,7 @@ fn void ArenaAlloc.destroy(&arena)
 	arena.regions.free();
 }
 
-fn ArenaRegion create_region(ArenaAlloc* arena, usz size) @local
+fn ArenaRegion create_region(ArenaAlloc* arena, usz size)
 {
 	ArenaRegion reg;
 	if (arena.alloc_init_type == AllocInitType.ZERO) {
@@ -299,17 +299,17 @@ fn ArenaRegion create_region(ArenaAlloc* arena, usz size) @local
 	return reg;
 }
 
-fn bool ArenaRegion.owns_ptr(&reg, void* ptr) @inline @local
+fn bool ArenaRegion.owns_ptr(&reg, void* ptr) @inline
 {
 	return (uptr)ptr >= (uptr)reg.data.ptr && (uptr)ptr < (uptr)reg.data.ptr + reg.data.len;
 }
 
-fn usz ArenaRegion.remain_mem(&reg) @inline @local
+fn usz ArenaRegion.remain_mem(&reg) @inline
 {
 	return reg.data.len - reg.cursor;
 }
 
-fn bool ArenaRegion.is_last_alloc(&reg, void* ptr, usz alloc_size) @inline @local
+fn bool ArenaRegion.is_last_alloc(&reg, void* ptr, usz alloc_size) @inline
 {
 	usz alloc_cursor = (usz)(ptr + alloc_size) - (usz)reg.data.ptr;
 	return alloc_cursor == reg.cursor;
