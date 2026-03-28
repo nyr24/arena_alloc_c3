@@ -8,7 +8,8 @@ fn void fill_alloc(char[] alloc)
 	uint rn = random::rand(128u);
 	uint rn2 = random::rand(128u);
 
-	for (uint ii = 0; ii < alloc.len; ++ii) {
+	for (uint ii = 0; ii < alloc.len; ++ii)
+	{
 		alloc[ii] = (ii & 1) == 0 ? (char)rn : (char)rn2;
 	}
 }
@@ -16,7 +17,8 @@ fn void fill_alloc(char[] alloc)
 fn void log_alloc(char[] alloc, String name = "unknown")
 {
 	io::printfn("Alloc: %s", name);
-	for (uint i = 0; i < 3; ++i) {
+	for (uint i = 0; i < 3; ++i)
+	{
 		uint r_n = rand(alloc.len);
 		io::printf("%c", alloc[r_n]);
 	}
@@ -29,43 +31,45 @@ fn void main_test() @test
 	arena.init(mem);
 	defer arena.destroy();
 
-	const EXAMPLE_1 = false;
-	const EXAMPLE_ENSURE = false;
+	const EXAMPLE_1          = false;
+	const EXAMPLE_ENSURE     = false;
 	const EXAMPLE_TEMP_SCOPE = true;
 
-	if (EXAMPLE_1) {
+	if (EXAMPLE_1)
+	{
 		example_1(&arena);
 	}
 
-	if (EXAMPLE_ENSURE) {
+	if (EXAMPLE_ENSURE)
+	{
 		example_ensure(&arena);
 	}
 
-	if (EXAMPLE_TEMP_SCOPE) {
+	if (EXAMPLE_TEMP_SCOPE)
+	{
 		example_temp_scope(&arena);
 	}
 }
 
-fn void example_temp_scope(ArenaAlloc* _arena)
+fn void example_temp_scope(ArenaAlloc* arena)
 {
-	_arena.ensure_capacity(1000);
+	arena.ensure_capacity(1000);
 
-	_arena.@temp_scope() {
-		Allocator arena = _arena;
-
-		char[] mem1 = allocator::alloc_array(arena, char, 200);
+	arena.@temp_scope(; alloc)
+	{
+		char[] mem1 = allocator::alloc_array(alloc, char, 200);
 		fill_alloc(mem1);
 		log_alloc(mem1, "mem1");
 
-		char[] mem2 = allocator::alloc_array(arena, char, 200);
+		char[] mem2 = allocator::alloc_array(alloc, char, 200);
 		fill_alloc(mem2);
 		log_alloc(mem2, "mem2");
 
-		char[] mem3 = allocator::alloc_array(arena, char, 200);
+		char[] mem3 = allocator::alloc_array(alloc, char, 200);
 		fill_alloc(mem3);
 		log_alloc(mem3, "mem3");
 
-		char[] mem4 = allocator::alloc_array(arena, char, 200);
+		char[] mem4 = allocator::alloc_array(alloc, char, 200);
 		fill_alloc(mem4);
 		log_alloc(mem4, "mem4");
 	};

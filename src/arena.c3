@@ -230,11 +230,11 @@ fn void ArenaAlloc.rewind_snapshot(&arena, ArenaSnapshot snapshot)
 	arena.snapshot_count--;
 }
 
-macro ArenaAlloc.@temp_scope(&arena; @body)
+macro ArenaAlloc.@temp_scope(&arena; @body(Allocator alloc))
 {
 	ArenaSnapshot sn = arena.create_snapshot();
 	defer arena.rewind_snapshot(sn);
-	@body();
+	@body(arena);
 }
 
 <*
