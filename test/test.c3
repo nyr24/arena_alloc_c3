@@ -57,19 +57,19 @@ fn void example_temp_scope(ArenaAlloc* arena)
 
 	arena.@temp_scope(; alloc)
 	{
-		char[] mem1 = allocator::alloc_array(alloc, char, 200);
+		char[] mem1 = alloc::alloc_array(alloc, char, 200);
 		fill_alloc(mem1);
 		log_alloc(mem1, "mem1");
 
-		char[] mem2 = allocator::alloc_array(alloc, char, 200);
+		char[] mem2 = alloc::alloc_array(alloc, char, 200);
 		fill_alloc(mem2);
 		log_alloc(mem2, "mem2");
 
-		char[] mem3 = allocator::alloc_array(alloc, char, 200);
+		char[] mem3 = alloc::alloc_array(alloc, char, 200);
 		fill_alloc(mem3);
 		log_alloc(mem3, "mem3");
 
-		char[] mem4 = allocator::alloc_array(alloc, char, 200);
+		char[] mem4 = alloc::alloc_array(alloc, char, 200);
 		fill_alloc(mem4);
 		log_alloc(mem4, "mem4");
 	};
@@ -114,19 +114,19 @@ fn void example_ensure(ArenaAlloc* _arena)
 	ArenaSnapshot snap = _arena.create_snapshot();
 	defer _arena.rewind_snapshot(snap);
 
-	char[] mem1 = allocator::alloc_array(arena, char, 100);
+	char[] mem1 = alloc::alloc_array(arena, char, 100);
 	fill_alloc(mem1);
 	log_alloc(mem1, "mem1");
 
-	char[] mem2 = allocator::alloc_array(arena, char, 500);
+	char[] mem2 = alloc::alloc_array(arena, char, 500);
 	fill_alloc(mem2);
 	log_alloc(mem2, "mem2");
 
-	char[] mem3 = allocator::alloc_array(arena, char, 700);
+	char[] mem3 = alloc::alloc_array(arena, char, 700);
 	fill_alloc(mem3);
 	log_alloc(mem3, "mem3");
 
-	char[] mem4 = allocator::alloc_array(arena, char, 800);
+	char[] mem4 = alloc::alloc_array(arena, char, 800);
 	fill_alloc(mem4);
 	log_alloc(mem4, "mem4");
 }

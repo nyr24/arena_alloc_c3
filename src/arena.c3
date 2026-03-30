@@ -65,9 +65,9 @@ fn void ArenaAlloc.init(
 *>
 fn void*? ArenaAlloc.acquire(&arena, usz size, AllocInitType init_type, usz alignment = 0) @dynamic
 {
-	alignment = allocator::alignment_for_allocation(alignment);
-	usz aligned_size_with_header = mem::aligned_offset(size + allocator::DEFAULT_SIZE_PREFIX, alignment);
-	usz aligned_size = aligned_size_with_header - allocator::DEFAULT_SIZE_PREFIX;
+	alignment = allocators::alignment_for_allocation(alignment);
+	usz aligned_size_with_header = mem::aligned_offset(size + allocators::DEFAULT_SIZE_PREFIX, alignment);
+	usz aligned_size = aligned_size_with_header - allocators::DEFAULT_SIZE_PREFIX;
 	ArenaRegion* region = null;
 	uint reg_ind = arena.snapshot_count > 0 ? arena.last_region_ind : 0;
 
@@ -98,9 +98,9 @@ fn void*? ArenaAlloc.acquire(&arena, usz size, AllocInitType init_type, usz alig
 *>
 fn void*? ArenaAlloc.resize(&arena, void* ptr, usz new_size, usz alignment = 0) @dynamic
 {
-	alignment = allocator::alignment_for_allocation(alignment);
-	usz aligned_new_size_with_header = mem::aligned_offset(new_size + allocator::DEFAULT_SIZE_PREFIX, alignment);
-	usz aligned_new_size = aligned_new_size_with_header - allocator::DEFAULT_SIZE_PREFIX;
+	alignment = allocators::alignment_for_allocation(alignment);
+	usz aligned_new_size_with_header = mem::aligned_offset(new_size + allocators::DEFAULT_SIZE_PREFIX, alignment);
+	usz aligned_new_size = aligned_new_size_with_header - allocators::DEFAULT_SIZE_PREFIX;
 	ArenaRegion* reg = null;
 	uint reg_ind = 0;
 	
@@ -116,7 +116,7 @@ fn void*? ArenaAlloc.resize(&arena, void* ptr, usz new_size, usz alignment = 0) 
 		return PTR_NOT_OWNED~;
 	}
 
-	usz* old_size = (usz*)(ptr - allocator::DEFAULT_SIZE_PREFIX);
+	usz* old_size = (usz*)(ptr - allocators::DEFAULT_SIZE_PREFIX);
 	isz alloc_size_diff = aligned_new_size - *old_size;
 	bool last_alloc = reg.is_last_alloc(ptr, *old_size);
 	
@@ -125,7 +125,7 @@ fn void*? ArenaAlloc.resize(&arena, void* ptr, usz new_size, usz alignment = 0) 
 		bool alloc_fits_curr_reg = (alloc_size_diff < 0) ? true : (reg.cursor + alloc_size_diff) <= reg.data.len;
 		if (!alloc_fits_curr_reg) {
 			// free this alloc and jump
-			reg.cursor -= (uint)(*old_size + allocator::DEFAULT_SIZE_PREFIX);
+			reg.cursor -= (uint)(*old_size + allocators::DEFAULT_SIZE_PREFIX);
 			break ALLOCATE_NEW;
 		}
 		*old_size = aligned_new_size;
@@ -171,11 +171,12 @@ fn void ArenaAlloc.release(&arena, void* ptr, bool aligned) @dynamic
 		return;
 	}
 
-	usz* alloc_size = (usz*)(ptr - allocator::DEFAULT_SIZE_PREFIX);
-	if (!reg.is_last_alloc(ptr, *alloc_size)) {
+	usz* alloc_size = (usz*)(ptr - allocators::DEFAULT_SIZE_PREFIX);
+	if (!reg.is_last_alloc(ptr, *alloc_size))
+	{
 		return;
 	}
-	reg.cursor -= (uint)(*alloc_size + allocator::DEFAULT_SIZE_PREFIX);
+	reg.cursor -= (uint)(*alloc_size + allocators::DEFAULT_SIZE_PREFIX);
 }
 
 <*
@@ -188,7 +189,7 @@ fn void ArenaAlloc.release(&arena, void* ptr, bool aligned) @dynamic
 fn void ArenaAlloc.ensure_capacity(&arena, usz cap)
 {
 	usz alignment = mem::DEFAULT_MEM_ALIGNMENT;
-	usz aligned_cap_with_header = mem::aligned_offset(cap + allocator::DEFAULT_SIZE_PREFIX, alignment);
+	usz aligned_cap_with_header = mem::aligned_offset(cap + allocators::DEFAULT_SIZE_PREFIX, alignment);
 	ArenaRegion* region = null;
 	uint reg_ind = arena.snapshot_count > 0 ? arena.last_region_ind : 0;
 
@@ -243,10 +244,10 @@ macro ArenaAlloc.@temp_scope(&arena; @body(Allocator alloc))
 *>
 fn void* finalize_alloc(ArenaAlloc* arena, ArenaRegion* reg, usz aligned_size, uint reg_ind) @inline @local
 {
-	void* ret = reg.data.ptr + reg.cursor + allocator::DEFAULT_SIZE_PREFIX;
-	usz* header = (usz*)(ret - allocator::DEFAULT_SIZE_PREFIX);
+	void* ret = reg.data.ptr + reg.cursor + allocators::DEFAULT_SIZE_PREFIX;
+	usz* header = (usz*)(ret - allocators::DEFAULT_SIZE_PREFIX);
 	*header = aligned_size;
-	reg.cursor += (uint)(aligned_size + allocator::DEFAULT_SIZE_PREFIX);
+	reg.cursor += (uint)(aligned_size + allocators::DEFAULT_SIZE_PREFIX);
 	arena.last_region_ind = math::max(arena.last_region_ind, reg_ind);
 	return ret;
 }
@@ -283,7 +284,7 @@ fn void ArenaAlloc.destroy(&arena)
 {
 	foreach (&reg : arena.regions) {
 		reg.cursor = 0;
-		allocator::free(arena.backing_alloc, reg.data.ptr);
+		alloc::free(arena.backing_alloc, reg.data.ptr);
 	}
 	arena.regions.free();
 }
@@ -291,10 +292,13 @@ fn void ArenaAlloc.destroy(&arena)
 fn ArenaRegion create_region(ArenaAlloc* arena, usz size)
 {
 	ArenaRegion reg;
-	if (arena.alloc_init_type == AllocInitType.ZERO) {
-		reg.data = allocator::new_array(arena.backing_alloc, char, math::max(size, (usz)arena.min_region_size));
-	} else {
-		reg.data = allocator::alloc_array(arena.backing_alloc, char, math::max(size, (usz)arena.min_region_size));
+	if (arena.alloc_init_type == AllocInitType.ZERO)
+	{
+		reg.data = alloc::new_array(arena.backing_alloc, char, math::max(size, (usz)arena.min_region_size));
+	}
+	else
+	{
+		reg.data = alloc::alloc_array(arena.backing_alloc, char, math::max(size, (usz)arena.min_region_size));
 	}
 	return reg;
 }
