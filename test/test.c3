@@ -2,6 +2,7 @@ module arena;
 
 import std::io;
 import std::math::random;
+import std::collections::map;
 
 fn void fill_alloc(char[] alloc)
 {
@@ -34,6 +35,7 @@ fn void main_test() @test
 	const EXAMPLE_1          = false;
 	const EXAMPLE_ENSURE     = false;
 	const EXAMPLE_TEMP_SCOPE = true;
+	const EXAMPLE_MAP = true;
 
 	if (EXAMPLE_1)
 	{
@@ -48,6 +50,11 @@ fn void main_test() @test
 	if (EXAMPLE_TEMP_SCOPE)
 	{
 		example_temp_scope(&arena);
+	}
+
+	if (EXAMPLE_MAP)
+	{
+		example_map(&arena);
 	}
 }
 
@@ -129,4 +136,28 @@ fn void example_ensure(ArenaAlloc* _arena)
 	char[] mem4 = alloc::alloc_array(arena, char, 800);
 	fill_alloc(mem4);
 	log_alloc(mem4, "mem4");
+}
+
+fn void example_map(ArenaAlloc* arena)
+{
+	Allocator a = arena.allocator();
+	HashMap{String, uint} map;
+	map.init(a, 100, 1.0);
+
+	String[*] keys = {
+		"hello", "world", "third"
+	};
+	uint[*] vals = {
+		23, 245, 5469,
+	};
+
+	for (uint i = 0; i < keys.len; ++i)
+	{
+		map.set(keys[i], vals[i]);
+	}
+
+	for (uint i = 0; i < keys.len; ++i)
+	{
+		assert(map.get(keys[i])!! == vals[i]);
+	}
 }
