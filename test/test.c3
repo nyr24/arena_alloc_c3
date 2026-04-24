@@ -32,8 +32,8 @@ fn void main_test() @test
 	arena.init(mem);
 	defer arena.destroy();
 
-	const EXAMPLE_1          = false;
-	const EXAMPLE_ENSURE     = false;
+	const EXAMPLE_1          = true;
+	const EXAMPLE_ENSURE     = true;
 	const EXAMPLE_TEMP_SCOPE = true;
 	const EXAMPLE_MAP = true;
 
