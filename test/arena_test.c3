@@ -1,5 +1,6 @@
-module arena;
+module arena_test;
 
+import nyr_allocators::arena;
 import std::io;
 import std::math::random;
 import std::collections::map;

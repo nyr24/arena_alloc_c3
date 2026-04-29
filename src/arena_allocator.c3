@@ -1,14 +1,23 @@
-module arena;
+module nyr_allocators::arena;
 import std::math;
 import std::io;
 import std::collections::list;
 
 // Individual allocation structure: [size=8bytes|payload|padding]
 
-const DEFAULT_REGION_SIZE = 4096;
-const MIN_REGION_SIZE     = 1024;
+const DEFAULT_REGION_SIZE @local = 4096;
+const MIN_REGION_SIZE     @local = 1024;
 
-struct ArenaRegion
+struct ArenaAlloc (Allocator, Printable)
+{
+	List{ArenaRegion} regions;
+	Allocator backing_alloc;
+	uint last_region_ind;
+	uint snapshot_count;
+	uint min_region_size;
+}
+
+struct ArenaRegion @local
 {
 	char[] data;
 	uint cursor;
@@ -18,15 +27,6 @@ struct ArenaSnapshot
 {
 	uint region;
 	uint cursor;
-}
-
-struct ArenaAlloc (Allocator, Printable)
-{
-	List{ArenaRegion} regions;
-	Allocator backing_alloc;
-	uint last_region_ind;
-	uint snapshot_count;
-	uint min_region_size;
 }
 
 <*
