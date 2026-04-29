@@ -251,7 +251,7 @@ macro ArenaAlloc.@temp_scope(&arena; @body(Allocator alloc))
 }
 
 <*
- Reclaim all used memory, allowing to use it freely again
+ Reclaim all used memory, allowing for reuse.
 *>
 fn void ArenaAlloc.reset(&arena)
 {
@@ -262,9 +262,9 @@ fn void ArenaAlloc.reset(&arena)
 }
 
 <*
- Destroy all the memory storage of arena and return it to OS
+ Free all the memory storage of arena and return it to backing allocator.
 *>
-fn void ArenaAlloc.destroy(&arena)
+fn void ArenaAlloc.free(&arena)
 {
 	foreach (&reg : arena.regions)
 	{
@@ -283,7 +283,7 @@ fn Allocator ArenaAlloc.allocator(&arena) @inline
 }
 
 <*
- Set the size that will be used as 'min' capacity boundary for newly created arena region
+ Set the size that will be used as 'min' capacity boundary for newly created arena region.
 *>
 fn void ArenaAlloc.set_min_region_size(&arena, uint min_size) @inline
 {
