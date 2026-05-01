@@ -40,6 +40,9 @@ bitstruct NodeState : sz @local
 
 struct FreeNode @local
 {
+ 	// Uncomment this and comment '_state' for better debug info.
+	// bool is_free;
+	// sz size;
  	// Embeds 'is_free' inside of 'size' to reduce memory usage.
 	inline NodeState _state;
 	FreeNode* prev_phys;
@@ -52,6 +55,9 @@ struct FreeNode @local
 
 struct AllocHeader @local
 {
+ 	// Uncomment this and comment '_state' for better debug info.
+	// bool is_free;
+	// sz size;
  	// Embeds 'is_free' inside of 'size' to reduce memory usage.
 	inline NodeState _state;
 	FreeNode* prev_phys;
@@ -109,7 +115,7 @@ fn void*? BSTAlloc.acquire(&self, sz size, AllocInitType init_type, sz alignment
 
 	if (!node)
 	{
-		return make_fallback_allocation(self, aligned_size, init_type);
+		return make_fallback_allocation(self, aligned_size, init_type)!;
 	}
 
 	remove_node(&self.root, node);
@@ -213,6 +219,11 @@ fn void BSTAlloc.release(&self, void* ptr, bool) @dynamic
 	// Prevent double free.
 	if (@unlikely(free_node.is_free)) return;
 
+	// Zero previously allocated memory.
+	free_node.parent = null;
+	free_node.left = null;
+	free_node.right = null;
+
 	// Order of this lines should be preserved.
 	free_node = coalesce_nodes_around(self, free_node);
 	insert_node(&self.root, free_node);
@@ -252,24 +263,33 @@ fn void BSTAlloc.reset(&self)
 fn sz? BSTAlloc.to_format(&self, Formatter* fmt) @dynamic
 {
 	sz total = fmt.print("Binary tree allocator info:")!;
+	sz main_buff_used = 0;
 
 	if (!self.root) {
 		total += fmt.print("[Empty Buffer]")!;
 		return total;
 	};
 
-	FreeNode* curr = self.root;
+	FreeNode* curr = (FreeNode*)self.data;
+	String usage_s;
 
 	while (curr && curr < self.tail)
 	{
-		String usage_s = curr.is_free ? "free" : "in use";
-		total += fmt.printf("\n\t[%s : %s]", curr.size, usage_s)!;
+		if (!curr.is_free)
+		{
+			usage_s = "used";
+			main_buff_used += curr.size;
+		}
+		else
+		{
+			usage_s = "free";
+		}
+		total += fmt.printf("\n\t[%s : %sB]", usage_s, curr.size)!;
 		curr = node_next(curr);
 	}
 
 	total += fmt.print("\n --- Block report finished --- \n")!;
-
-	total += print_total_usage(self, fmt)!;
+	total += print_total_usage(self, fmt, main_buff_used)!;
 
 	return total;
 }
@@ -277,53 +297,31 @@ fn sz? BSTAlloc.to_format(&self, Formatter* fmt) @dynamic
 <*
  Print total memory usage statistics.
 *>
-fn sz? print_total_usage(BSTAlloc* self, Formatter* fmt) @local
+fn sz? print_total_usage(BSTAlloc* self, Formatter* fmt, sz main_buff_used) @local
 {
-	sz main_buff_used = calc_used_main_buff_mem(self);
 	sz fallback_used = calc_used_fallback_mem(self);
-	String fmt_string = "Total usage:\n\tmemory total = %.0fB / %.2fKiB / %.3fMiB / %.4fGiB\n\tmemory used  = %.0fB / %.2fKiB / %.3fMiB / %.4fGiB\n\textra allocated = %.0fB / %.2fKiB / %.3fMiB / %.4fGiB";
+	sz main_buff_remain = self.capacity - main_buff_used;
+	String fmt_string = "Total usage:\n\tmemory total  = %.0fB / %.2fKiB / %.3fMiB / %.4fGiB\n\tmemory used   = %.0fB / %.2fKiB / %.3fMiB / %.4fGiB\n\tmemory remain = %.0fB / %.2fKiB / %.3fMiB / %.4fGiB\n\textra allocated = %.0fB / %.2fKiB / %.3fMiB / %.4fGiB";
 
-	if (self.capacity > main_buff_used)
-	{
-		return fmt.printf(
-			fmt_string,
-			(float)self.capacity,
-			self.capacity / (float)mem::KB,
-			self.capacity / (float)mem::MB,
-			self.capacity / (float)mem::GB,
-			(float)main_buff_used,
-			main_buff_used / (float)mem::KB,
-			main_buff_used / (float)mem::MB,
-			main_buff_used / (float)mem::GB,
-			(float)fallback_used,
-			fallback_used / (float)mem::KB,
-			fallback_used / (float)mem::MB,
-			fallback_used / (float)mem::GB,
-		);
-	}
-	else
-	{
-		float bytes = (float)self.capacity;
-		float kib = self.capacity / (float)mem::KB;
-		float mib = self.capacity / (float)mem::MB;
-		float gib = self.capacity / (float)mem::GB;
-
-		return fmt.printf(
-			fmt_string,
-			bytes,
-			kib,
-			mib,
-			gib,
-			bytes,
-			kib,
-			mib,
-			gib,
-			(float)fallback_used,
-			fallback_used / (float)mem::KB,
-			fallback_used / (float)mem::MB,
-			fallback_used / (float)mem::GB,
-		);
-	}
+	return fmt.printf(
+		fmt_string,
+		(float)self.capacity,
+		self.capacity / (float)mem::KB,
+		self.capacity / (float)mem::MB,
+		self.capacity / (float)mem::GB,
+		(float)main_buff_used,
+		main_buff_used / (float)mem::KB,
+		main_buff_used / (float)mem::MB,
+		main_buff_used / (float)mem::GB,
+		(float)main_buff_remain,
+		main_buff_remain / (float)mem::KB,
+		main_buff_remain / (float)mem::MB,
+		main_buff_remain / (float)mem::GB,
+		(float)fallback_used,
+		fallback_used / (float)mem::KB,
+		fallback_used / (float)mem::MB,
+		fallback_used / (float)mem::GB,
+	);
 }
 
 // ------ Private API ------
@@ -534,28 +532,6 @@ fn FreeNode* node_next(FreeNode* node) @inline @local
 fn FreeNode* node_at_offset(FreeNode* node, sz offset) @inline @local
 {
 	return (FreeNode*)((char*)node + offset);
-}
-
-<*
- Calculates all memory that were allocated as in the main buffer.
-*>
-fn sz calc_used_main_buff_mem(BSTAlloc* self) @local
-{
-	return calc_used_main_buff_mem_recur(self.root, 0);
-}
-
-fn sz calc_used_main_buff_mem_recur(FreeNode* curr_node, sz res) @local
-{
-	if (!curr_node) return res;
-
-	if (!curr_node.is_free)
-	{
-		res += curr_node.size;
-	}
-
-	res += calc_used_main_buff_mem_recur(curr_node.left, res);
-	res += calc_used_main_buff_mem_recur(curr_node.right, res);
-	return res;
 }
 
 <*
