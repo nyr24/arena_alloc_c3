@@ -245,12 +245,43 @@ fn void BSTAlloc.reset(&self)
 
 <*
  Implements 'Printable' interface.
+
+ @require self.root != null : "Must be initialized"
+ @require self.tail != null : "Must be initialized"
 *>
 fn sz? BSTAlloc.to_format(&self, Formatter* fmt) @dynamic
 {
+	sz total = fmt.print("Binary tree allocator info:")!;
+
+	if (!self.root) {
+		total += fmt.print("[Empty Buffer]")!;
+		return total;
+	};
+
+	FreeNode* curr = self.root;
+
+	while (curr && curr < self.tail)
+	{
+		String usage_s = curr.is_free ? "free" : "in use";
+		total += fmt.printf("\n\t[%s : %s]", curr.size, usage_s)!;
+		curr = node_next(curr);
+	}
+
+	total += fmt.print("\n --- Block report finished --- \n")!;
+
+	total += print_total_usage(self, fmt)!;
+
+	return total;
+}
+
+<*
+ Print total memory usage statistics.
+*>
+fn sz? print_total_usage(BSTAlloc* self, Formatter* fmt) @local
+{
 	sz main_buff_used = calc_used_main_buff_mem(self);
 	sz fallback_used = calc_used_fallback_mem(self);
-	String fmt_string = "BST heap allocator state:\n\tmemory total = %.0fB / %.2fKiB / %.3fMiB / %.4fGiB\n\tmemory used  = %.0fB / %.2fKiB / %.3fMiB / %.4fGiB\n\textra allocated = %.0fB / %.2fKiB / %.3fMiB / %.4fGiB";
+	String fmt_string = "Total usage:\n\tmemory total = %.0fB / %.2fKiB / %.3fMiB / %.4fGiB\n\tmemory used  = %.0fB / %.2fKiB / %.3fMiB / %.4fGiB\n\textra allocated = %.0fB / %.2fKiB / %.3fMiB / %.4fGiB";
 
 	if (self.capacity > main_buff_used)
 	{
