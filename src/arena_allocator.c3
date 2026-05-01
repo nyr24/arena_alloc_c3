@@ -1,53 +1,58 @@
 module nyr_allocators::arena;
 import std::math;
 import std::io;
-import std::collections::list;
 
-// Individual allocation structure: [size=8bytes|payload|padding]
+// Individual allocation structure: [header|payload|padding]
 
-const DEFAULT_REGION_SIZE @local = 4096;
-const MIN_REGION_SIZE     @local = 1024;
+const DEFAULT_REGION_SIZE  @local = 4096;
+const MIN_REGION_SIZE      @local = 512;
+const DEFAULT_REGION_COUNT @local = 2; 
+const HEADER_SIZE          @local = allocators::DEFAULT_SIZE_PREFIX;
 
 struct ArenaAlloc (Allocator, Printable)
 {
-	List{ArenaRegion} regions;
+	ArenaRegion* regions;
+	ArenaRegion* last_region;
 	Allocator backing_alloc;
-	uint last_region_ind;
-	uint snapshot_count;
-	uint min_region_size;
+	sz last_region_ind;
+	sz snapshot_count;
+	sz min_region_size;
 }
 
 struct ArenaRegion @local
 {
-	char[] data;
-	uint cursor;
+	sz capacity;
+	sz cursor;
+	ArenaRegion* next;
+	ArenaRegion* prev;
+	char[*] memory;
 }
 
 struct ArenaSnapshot
 {
-	uint region;
-	uint cursor;
+	ArenaRegion* region;
+	sz cursor;
 }
 
 <*
  Initializes the arena.
 
- @require init_region_capacity >= 1 : "Should be at least one"
  @require min_region_size >= MIN_REGION_SIZE : "Shouldn't be less than this"
  @require first_region_size >= MIN_REGION_SIZE : "Shouldn't be less than this"
 *>
 fn void ArenaAlloc.init(
 	&arena,
 	Allocator backing_alloc,
-	uint min_region_size = DEFAULT_REGION_SIZE,
-	uint first_region_size = DEFAULT_REGION_SIZE,
-	sz init_region_capacity = 1,
+	sz min_region_size = DEFAULT_REGION_SIZE,
+	sz first_region_size = DEFAULT_REGION_SIZE,
 )
 {
+	*arena = { };
 	arena.backing_alloc = backing_alloc;
 	arena.min_region_size = min_region_size;
-	arena.regions.init(backing_alloc, init_region_capacity);
-	push_region(arena, first_region_size);
+	// First region initialized here, so we don't need to check if there'is a 'head' in 'push_region' every time.
+	arena.regions = allocate_region(arena, first_region_size);
+	arena.last_region = arena.regions;
 }
 
 <*
@@ -61,28 +66,26 @@ fn void ArenaAlloc.init(
 fn void*? ArenaAlloc.acquire(&arena, sz size, AllocInitType init_type, sz alignment = 0) @dynamic
 {
 	alignment = allocators::alignment_for_allocation(alignment);
-	sz aligned_size_with_header = mem::aligned_offset(size + allocators::DEFAULT_SIZE_PREFIX, alignment);
-	sz aligned_size = aligned_size_with_header - allocators::DEFAULT_SIZE_PREFIX;
-	ArenaRegion* region = null;
-	uint reg_ind = arena.snapshot_count > 0 ? arena.last_region_ind : 0;
+	sz aligned_size_with_header = mem::aligned_offset(alignment + HEADER_SIZE + size, mem::DEFAULT_MEM_ALIGNMENT);
+	sz aligned_size = aligned_size_with_header - HEADER_SIZE;
+	ArenaRegion* curr = arena.snapshot_count > 0 ? arena.last_region : arena.regions;
+	ArenaRegion* sufficient_reg = null;
 
-	for (; reg_ind < arena.regions.size; ++reg_ind)
+	while (curr)
 	{
-		ArenaRegion* curr = &arena.regions[reg_ind];
 		if (aligned_size <= remain_mem(curr))
 		{
-			region = curr;
+			sufficient_reg = curr;
 			break;
 		}
 	}
 
-	if (!region)
+	if (!sufficient_reg)
 	{
-		sz last_ind = push_region(arena, aligned_size_with_header);
-		region = &arena.regions[last_ind];
+		sufficient_reg = push_region(arena, aligned_size_with_header);
 	}
 
-	return finalize_alloc(arena, region, aligned_size, reg_ind, init_type);
+	return finalize_alloc(arena, sufficient_reg, aligned_size, alignment, init_type);
 }
 
 <*
@@ -96,121 +99,88 @@ fn void*? ArenaAlloc.acquire(&arena, sz size, AllocInitType init_type, sz alignm
 *>
 fn void*? ArenaAlloc.resize(&arena, void* ptr, sz new_size, sz alignment = 0) @dynamic
 {
-	alignment = allocators::alignment_for_allocation(alignment);
-	sz aligned_new_size_with_header = mem::aligned_offset(new_size + allocators::DEFAULT_SIZE_PREFIX, alignment);
-	sz aligned_new_size = aligned_new_size_with_header - allocators::DEFAULT_SIZE_PREFIX;
+	sz aligned_new_size = mem::aligned_offset(new_size, mem::DEFAULT_MEM_ALIGNMENT);
+	ArenaRegion* curr = arena.regions;
 	ArenaRegion* reg = null;
-	uint reg_ind = 0;
 
-	foreach (uint i, &curr_reg : arena.regions)
+	while (curr)
 	{
-		if (curr_reg.owns_ptr(ptr))
+		if (owns_ptr(curr, ptr))
 		{
-			reg = curr_reg;
-			reg_ind = i;
+			reg = curr;
 			break;
 		}
 	}
 
-	assert(ptr != null, "Pointer isn't managed by this allocator");
+	assert(reg != null, "Pointer isn't managed by this allocator");
 
-	sz* old_size = (sz*)((char*)ptr - allocators::DEFAULT_SIZE_PREFIX);
+	sz* old_size = (sz*)((char*)ptr - HEADER_SIZE);
 	sz alloc_size_diff = aligned_new_size - *old_size;
-	bool last_alloc = reg.is_last_alloc(ptr, *old_size);
+	bool last_alloc = is_last_alloc(reg, ptr, *old_size);
 
 	// if allocation was last one in this region
 	if ALLOCATE_NEW: (last_alloc)
 	{
-		bool alloc_fits_curr_reg = (alloc_size_diff < 0) ? true : (reg.cursor + alloc_size_diff) <= reg.data.len;
+		bool alloc_fits_curr_reg = (alloc_size_diff < 0) ? true : (reg.cursor + alloc_size_diff) <= reg.capacity;
 		if (!alloc_fits_curr_reg)
 		{
 			// free this alloc and jump
-			reg.cursor -= (uint)(*old_size + allocators::DEFAULT_SIZE_PREFIX);
+			reg.cursor -= (sz)(*old_size + HEADER_SIZE);
 			break ALLOCATE_NEW;
 		}
 		*old_size = aligned_new_size;
-		reg.cursor += (uint)alloc_size_diff;
+		reg.cursor += alloc_size_diff;
 		return ptr;
 	}
-
 	// if allocation was NOT last one in this region try to feet it at the end
-	if (!last_alloc)
+	else
 	{
-		bool enough_place_at_end = aligned_new_size_with_header <= remain_mem(reg);
+		alignment = allocators::alignment_for_allocation(alignment);
+		sz aligned_size_with_header = mem::aligned_offset(alignment + new_size + HEADER_SIZE, mem::DEFAULT_MEM_ALIGNMENT);
+		bool enough_place_at_end = aligned_size_with_header <= remain_mem(reg);
 		if (enough_place_at_end)
 		{
-			void* ret = finalize_alloc(arena, reg, aligned_new_size, reg_ind, NO_ZERO);
+			sz aligned_size = aligned_size_with_header - HEADER_SIZE;
+			void* ret = finalize_alloc(arena, reg, aligned_size, alignment, NO_ZERO);
 			mem::copy((char*)ret, (char*)ptr, math::min(*old_size, new_size));
 			return ret;
 		}
 	}
 
-	void*? ret = arena.acquire(aligned_new_size, NO_ZERO, alignment);
-	if (catch excuse = ret)
-	{
-		return excuse~;
-	}
+	void* ret = arena.acquire(new_size, NO_ZERO, alignment)!;
 	mem::copy((char*)ret, (char*)ptr, math::min(*old_size, new_size));
 	return ret;
 }
 
 <*
  Release memory acquired using `acquire` or `resize`.
+ It is not a good practice to free individual pointers from arena
+ Consider using snapshots, @temp_scope, or resetting whole arena.
 
  @require ptr != null : "Empty pointers should never be released"
 *>
-fn void ArenaAlloc.release(&arena, void* ptr, bool aligned) @dynamic
+fn void ArenaAlloc.release(&arena, void* ptr, bool) @dynamic
 {
+	ArenaRegion* curr = arena.regions;
 	ArenaRegion* reg = null;
 
-	foreach (&curr_reg : arena.regions)
+	while (curr)
 	{
-		if (curr_reg.owns_ptr(ptr))
+		if (owns_ptr(curr, ptr))
 		{
-			reg = curr_reg;
+			reg = curr;
 			break;
 		}
 	}
 
-	if (!reg)
+	assert(reg, "Pointer isn't managed by this allocator");
+
+	sz* alloc_size = (sz*)(ptr - HEADER_SIZE);
+	if (!is_last_alloc(reg, ptr, *alloc_size))
 	{
 		return;
 	}
-
-	sz* alloc_size = (sz*)(ptr - allocators::DEFAULT_SIZE_PREFIX);
-	if (!reg.is_last_alloc(ptr, *alloc_size))
-	{
-		return;
-	}
-	reg.cursor -= (uint)(*alloc_size + allocators::DEFAULT_SIZE_PREFIX);
-}
-
-<*
- Ensure that arena has contiguous memory space of size 'cap'
-
- Use case for this: you know that you will have 'n' small allocations
- and you don't want to preallocate all the space for them in 'acquire' call,
- but made them as separate ones, still preserving opportunity for storing them in a single Region
-*>
-fn void ArenaAlloc.ensure_capacity(&arena, sz cap)
-{
-	sz alignment = mem::DEFAULT_MEM_ALIGNMENT;
-	sz aligned_cap_with_header = mem::aligned_offset(cap + allocators::DEFAULT_SIZE_PREFIX, alignment);
-	ArenaRegion* region = null;
-	uint reg_ind = arena.snapshot_count > 0 ? arena.last_region_ind : 0;
-
-	for (; reg_ind < arena.regions.size; ++reg_ind)
-	{
-		ArenaRegion* curr = &arena.regions[reg_ind];
-		if (aligned_cap_with_header <= remain_mem(curr))
-		{
-			arena.last_region_ind = math::max(arena.last_region_ind, reg_ind);
-			return;
-		}
-	}
-
-	// didn't found sufficient region, acquire new one
-	push_region(arena, aligned_cap_with_header);
+	reg.cursor -= (sz)(*alloc_size + HEADER_SIZE);
 }
 
 <*
@@ -220,23 +190,30 @@ fn void ArenaAlloc.ensure_capacity(&arena, sz cap)
 fn ArenaSnapshot ArenaAlloc.create_snapshot(&arena)
 {
 	ArenaSnapshot snap;
-	snap.region = arena.last_region_ind;
-	snap.cursor = arena.regions[arena.last_region_ind].cursor;
+	snap.region = arena.last_region;
+	snap.cursor = arena.last_region.cursor;
 	arena.snapshot_count++;
 	return snap;
 }
 
 <*
  Reclaim all memory used since a call to 'create_snapshot'
+
+ @require snapshot.region != null : "Shouldn't be null"
 *>
 fn void ArenaAlloc.rewind_snapshot(&arena, ArenaSnapshot snapshot)
 {
-	for (sz i = arena.last_region_ind; i > snapshot.region; --i)
+	ArenaRegion* curr = arena.last_region;
+
+	while (curr && curr != snapshot.region)
 	{
-		arena.regions[i].cursor = 0;
+		curr.cursor = 0;
+		curr = curr.prev;
 	}
-	arena.regions[snapshot.region].cursor = snapshot.cursor;
-	arena.last_region_ind = snapshot.region;
+
+	assert(curr != null && curr == snapshot.region, "Should be provided region");
+	curr.cursor = snapshot.cursor;
+	arena.last_region = curr;
 	arena.snapshot_count--;
 }
 
@@ -255,48 +232,60 @@ macro ArenaAlloc.@temp_scope(&arena; @body(Allocator alloc))
 *>
 fn void ArenaAlloc.reset(&arena)
 {
-	foreach (&reg : arena.regions)
+	ArenaRegion* curr = arena.regions;
+
+	while (curr)
 	{
-		reg.cursor = 0;
+		curr.cursor = 0;
+		curr = curr.next;
 	}
+
+	arena.last_region = arena.regions;
 }
 
 <*
  Free all the memory storage of arena and return it to backing allocator.
+
+ @require arena.regions != null : "Should be initialized"
 *>
 fn void ArenaAlloc.free(&arena)
 {
-	foreach (&reg : arena.regions)
-	{
-		reg.cursor = 0;
-		alloc::free(arena.backing_alloc, reg.data.ptr);
-	}
-	arena.regions.free();
-}
+	ArenaRegion* curr = arena.regions;
+	ArenaRegion* next = null;
 
-<*
- Convenient access to 'Allocator' interface.
-*>
-fn Allocator ArenaAlloc.allocator(&arena) @inline
-{
-	return (Allocator)arena;
+ 	while (curr)
+	{
+		next = curr.next;
+		alloc::free(arena.backing_alloc, curr);
+		curr = next;
+	}
+
+	arena.regions = null;
+	arena.last_region = null;
 }
 
 <*
  Set the size that will be used as 'min' capacity boundary for newly created arena region.
+
+ @require min_size >= MIN_REGION_SIZE : "Should be greater than min"
 *>
-fn void ArenaAlloc.set_min_region_size(&arena, uint min_size) @inline
+fn void ArenaAlloc.set_min_region_size(&arena, sz min_size) @inline
 {
 	arena.min_region_size = min_size;
 }
 
+<*
+ Implements 'Printable' interface.
+*>
 fn sz? ArenaAlloc.to_format(&arena, Formatter* fmt) @dynamic
 {
-	sz total = fmt.print("Arena allocator info:")!;
+	sz total = fmt.print("Arena allocator info: [cursor : capacity]")!;
+	ArenaRegion* curr = arena.regions;
 
-	foreach (sz i, reg : arena.regions)
+	while (curr)
 	{
-		fmt.printf("\n\tRegion %s: [%s : %s], free space: %s", i, reg.cursor, reg.data.len, remain_mem(&reg))!;
+		fmt.printf("\n\t[%s : %s], remain: %s", curr.cursor, curr.capacity, remain_mem(curr))!;
+		curr = curr.next;
 	}
 
 	return total;
@@ -311,15 +300,15 @@ fn void* finalize_alloc(
 	ArenaAlloc* arena,
 	ArenaRegion* reg,
 	sz aligned_size,
-	uint reg_ind,
-	AllocInitType init_type
+	sz alignment,
+	AllocInitType init_type,
 ) @inline @local
 {
-	void* ret = reg.data.ptr + reg.cursor + allocators::DEFAULT_SIZE_PREFIX;
-	sz* header = (sz*)(ret - allocators::DEFAULT_SIZE_PREFIX);
+	char* start = (char*)&reg.memory + reg.cursor + HEADER_SIZE;
+	char* ret = mem::aligned_pointer(start, alignment);
+	sz* header = (sz*)(ret - HEADER_SIZE);
 	*header = aligned_size;
-	reg.cursor += (uint)(aligned_size + allocators::DEFAULT_SIZE_PREFIX);
-	arena.last_region_ind = math::max(arena.last_region_ind, reg_ind);
+	reg.cursor += aligned_size + HEADER_SIZE;
 	if (init_type == ZERO)
 	{
 		mem::clear(ret, aligned_size);
@@ -329,30 +318,51 @@ fn void* finalize_alloc(
 
 <*
  Add new region to the arena.
+
+ @require arena.last_region != null : "Shouldn't be null"
 *>
-fn uint push_region(ArenaAlloc* arena, sz size) @inline @local
+fn ArenaRegion* push_region(ArenaAlloc* arena, sz size) @local
 {
-	arena.regions.push(create_region(arena, size));
-	arena.last_region_ind = math::max(arena.last_region_ind, (uint)(arena.regions.size - 1));
-	return arena.last_region_ind;
+	ArenaRegion* curr = arena.last_region;
+	ArenaRegion* prev = curr;
+
+	while (curr)
+	{
+		prev = curr;
+		curr = curr.next;
+	}
+
+	assert(prev, "Shouldn't be null");
+
+	curr = allocate_region(arena, size);
+	curr.prev = prev;
+	prev.next = curr;
+
+	arena.last_region = curr;
+	return curr;
 }
 
 <*
- Initialize arena region.
+ Allocate new arena region.
 *>
-fn ArenaRegion create_region(ArenaAlloc* arena, sz size) @private
+fn ArenaRegion* allocate_region(ArenaAlloc* arena, sz size) @local
 {
-	ArenaRegion reg;
-	reg.data = alloc::alloc_array(arena.backing_alloc, char, math::max(size, (sz)arena.min_region_size));
+	sz cap = math::max(size, arena.min_region_size);
+	sz aligned_cap = mem::aligned_offset(cap, mem::DEFAULT_MEM_ALIGNMENT);
+	ArenaRegion* reg = alloc::alloc_with_padding(arena.backing_alloc, ArenaRegion, aligned_cap)!!;
+	reg.capacity = aligned_cap;
+	reg.cursor = 0;
+	reg.next = null;
+	reg.prev = null;
 	return reg;
 }
 
 <*
  Tell if provided pointer is owned by this allocator memory.
 *>
-fn bool ArenaRegion.owns_ptr(&reg, void* ptr) @inline
+fn bool owns_ptr(ArenaRegion* reg, void* ptr) @inline @local
 {
-	return (uptr)ptr >= (uptr)reg.data.ptr && (uptr)ptr < (uptr)reg.data.ptr + reg.data.len;
+	return ((uptr)ptr >= (uptr)&reg.memory) && ((uptr)ptr < ((uptr)&reg.memory + reg.capacity));
 }
 
 <*
@@ -360,14 +370,14 @@ fn bool ArenaRegion.owns_ptr(&reg, void* ptr) @inline
 *>
 fn sz remain_mem(ArenaRegion* reg) @inline @local
 {
-	return reg.data.len - reg.cursor;
+	return reg.capacity - reg.cursor;
 }
 
 <*
  Tell if provided allocation is last in the region.
 *>
-fn bool ArenaRegion.is_last_alloc(&reg, void* ptr, sz alloc_size) @inline
+fn bool is_last_alloc(ArenaRegion* reg, void* ptr, sz alloc_size) @inline @local
 {
-	sz alloc_cursor = (sz)(ptr + alloc_size) - (sz)reg.data.ptr;
+	sz alloc_cursor = ((char*)ptr + alloc_size) - (char*)&reg.memory;
 	return alloc_cursor == reg.cursor;
 }
