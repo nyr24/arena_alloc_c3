@@ -19,7 +19,6 @@ struct BSTAlloc (Allocator, Printable)
 	char* data;
 	sz capacity;
 	FreeNode* root;
-	FreeNode* tail;
 	FallbackAlloc* fallback_root;
 	BSTAllocStrategy strategy;
 	Allocator backing_alloc;
@@ -33,8 +32,9 @@ enum BSTAllocStrategy
 
 bitstruct NodeState : sz @local
 {
-	// Aligned size of memory block + AllocHeader.
+	// Embeds 'is_free' inside of 'size' to reduce memory usage.
 	bool is_free : 0..0;
+	// Aligned size of memory block + AllocHeader.
 	sz size : 1..(bitsizeof(sz) - 1);
 }
 
@@ -43,7 +43,6 @@ struct FreeNode @local
  	// Uncomment this and comment '_state' for better debug info.
 	// bool is_free;
 	// sz size;
- 	// Embeds 'is_free' inside of 'size' to reduce memory usage.
 	inline NodeState _state;
 	FreeNode* prev_phys;
 	// Overwritten on allocation.
@@ -58,7 +57,6 @@ struct AllocHeader @local
  	// Uncomment this and comment '_state' for better debug info.
 	// bool is_free;
 	// sz size;
- 	// Embeds 'is_free' inside of 'size' to reduce memory usage.
 	inline NodeState _state;
 	FreeNode* prev_phys;
 }
@@ -86,7 +84,6 @@ fn void BSTAlloc.init(
 	self.data = (char*)alloc::alloc_with_padding(backing_alloc, AllocHeader, self.capacity)!!;
 	self.backing_alloc = backing_alloc;
 	self.strategy = strategy;
-	self.tail = (FreeNode*)(self.data + self.capacity);
 	self.reset();
 }
 
@@ -176,7 +173,7 @@ fn void*? BSTAlloc.resize(&self, void* old_pointer, sz size, sz alignment) @dyna
 	FreeNode* next = node_next(node);
 
 	// Try to extend.
-	if (next < self.tail && next.is_free)
+	if (next < tail_ref(self) && next.is_free)
 	{
 		sz diff = mem::aligned_offset(new_size - old_size, alignment);
 		sz new_node_size = next.size - diff;
@@ -258,7 +255,7 @@ fn void BSTAlloc.reset(&self)
  Implements 'Printable' interface.
 
  @require self.root != null : "Must be initialized"
- @require self.tail != null : "Must be initialized"
+ @require tail_ref(self) != null : "Must be initialized"
 *>
 fn sz? BSTAlloc.to_format(&self, Formatter* fmt) @dynamic
 {
@@ -271,9 +268,10 @@ fn sz? BSTAlloc.to_format(&self, Formatter* fmt) @dynamic
 	};
 
 	FreeNode* curr = (FreeNode*)self.data;
+	FreeNode* tail = tail_ref(self);
 	String usage_s;
 
-	while (curr && curr < self.tail)
+	while (curr && curr < tail)
 	{
 		if (!curr.is_free)
 		{
@@ -288,7 +286,7 @@ fn sz? BSTAlloc.to_format(&self, Formatter* fmt) @dynamic
 		curr = node_next(curr);
 	}
 
-	total += fmt.print("\n --- Block report finished --- \n")!;
+	total += fmt.print("\n--- Block report finished ---\n")!;
 	total += print_total_usage(self, fmt, main_buff_used)!;
 
 	return total;
@@ -335,9 +333,10 @@ fn FreeNode* find_node_best_fit(BSTAlloc* self, sz req_size) @local
 	if (!self.root) return null;
 
 	FreeNode* curr = self.root;
+	FreeNode* tail = tail_ref(self);
 	FreeNode* best_node = null;
 
-	while (curr && curr < self.tail)
+	while (curr && curr < tail)
 	{
 		if (curr.size >= req_size)
 		{
@@ -362,8 +361,9 @@ fn FreeNode* find_node_first_fit(BSTAlloc* self, sz req_size) @local
 	if (!self.root) return null;
 
 	FreeNode* curr = self.root;
+	FreeNode* tail = tail_ref(self);
 
-	while (curr && curr < self.tail)
+	while (curr && curr < tail)
 	{
 		if (curr.size >= req_size)
 		{
@@ -473,9 +473,10 @@ fn void remove_node(FreeNode** root, FreeNode* node_to_remove) @local
 fn FreeNode* coalesce_nodes_around(BSTAlloc* self, FreeNode* node) @local
 {
 	FreeNode* next = node_next(node);
+	FreeNode* tail = tail_ref(self);
 	bool was_merge = false;
 
-	if (next < self.tail && next.is_free)
+	if (next < tail && next.is_free)
 	{
 		node.size += next.size;
 		remove_node(&self.root, next);
@@ -494,7 +495,7 @@ fn FreeNode* coalesce_nodes_around(BSTAlloc* self, FreeNode* node) @local
 	if (was_merge)
 	{
 		next = node_next(node);
-		if (next < self.tail)
+		if (next < tail)
 		{
 			next.prev_phys = node;
 		}
@@ -532,6 +533,14 @@ fn FreeNode* node_next(FreeNode* node) @inline @local
 fn FreeNode* node_at_offset(FreeNode* node, sz offset) @inline @local
 {
 	return (FreeNode*)((char*)node + offset);
+}
+
+<*
+ Returns a tail node of the allocator, which serves as a memory buffer boundary.
+*>
+fn FreeNode* tail_ref(BSTAlloc* self) @inline @local
+{
+	return (FreeNode*)(self.data + self.capacity);
 }
 
 <*
