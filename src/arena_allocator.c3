@@ -212,7 +212,7 @@ $endif
 		curr = curr.next;
 	}
 
-	assert(reg, "Pointer isn't managed by this allocator");
+	if (!reg) return;
 
 	sz* alloc_size = (sz*)(ptr - HEADER_SIZE);
 	if (!is_last_alloc(reg, ptr, *alloc_size))
