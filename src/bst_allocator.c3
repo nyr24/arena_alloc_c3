@@ -1,6 +1,13 @@
 module nyr_allocators::bst;
+
+// Aliases for public use.
+alias BSTAllocator = BSTAlloc{false};
+alias ThreadBSTAllocator = BSTAlloc{true};
+
+module nyr_allocators::bst <THREAD_SAFE>;
 import std::io;
 import std::math;
+import std::thread @norecurse;
 
 const DEFAULT_CAPACITY	   = 4096;
 const MIN_BLOCK_SIZE       = mem::DEFAULT_MEM_ALIGNMENT + FreeNode::size;
@@ -14,7 +21,7 @@ const MIN_CAPACITY         = MIN_BLOCK_SIZE * 4;
  When the allocator exhausts its memory or fragmentation becomes too high, it falls back to its backing allocator. Fallback allocations are automatically freed when the allocator is destroyed; the user must not free them manually.
  Fallback allocations can also be resized.
 *>
-struct BSTAlloc (Allocator, Printable)
+struct BSTAlloc (Allocator, Printable) @private
 {
 	char* data;
 	sz capacity;
@@ -22,6 +29,7 @@ struct BSTAlloc (Allocator, Printable)
 	FallbackAlloc* fallback_root;
 	BSTAllocStrategy strategy;
 	Allocator backing_alloc;
+	Mutex mutex @if(THREAD_SAFE);
 }
 
 enum BSTAllocStrategy
@@ -80,6 +88,14 @@ fn void BSTAlloc.init(
 	BSTAllocStrategy strategy = BEST_FIT,
 )
 {
+	*self = {};
+
+$if THREAD_SAFE:
+	self.mutex.init()!!;
+	self.mutex.lock();
+	defer self.mutex.unlock();
+$endif
+
 	self.capacity = mem::aligned_offset(init_capacity, mem::DEFAULT_MEM_ALIGNMENT);
 	self.data = (char*)alloc::alloc_with_padding(backing_alloc, AllocHeader, self.capacity)!!;
 	self.backing_alloc = backing_alloc;
@@ -94,7 +110,19 @@ fn void BSTAlloc.init(
  @require alignment <= mem::MAX_MEMORY_ALIGNMENT : `alignment too big`
  @require size > 0
 *>
-fn void*? BSTAlloc.acquire(&self, sz size, AllocInitType init_type, sz alignment) @dynamic
+fn void*? BSTAlloc.acquire(&self, sz size, AllocInitType init_type, sz alignment = 0) @dynamic
+{
+$if THREAD_SAFE:
+	self.mutex.lock();
+	defer self.mutex.unlock();
+$endif
+	return _acquire(self, size, init_type, alignment);
+}
+
+<*
+ Non-locking 'acquire' procedure body, required for 'resize' which locks.
+*>
+macro void*? _acquire(BSTAlloc* self, sz size, AllocInitType init_type, sz alignment = 0) @local
 {
 	alignment = allocators::alignment_for_allocation(alignment);
 	sz aligned_size = mem::aligned_offset(size + AllocHeader::size, alignment);
@@ -146,6 +174,11 @@ fn void*? BSTAlloc.acquire(&self, sz size, AllocInitType init_type, sz alignment
 *>
 fn void*? BSTAlloc.resize(&self, void* old_pointer, sz size, sz alignment) @dynamic
 {
+$if THREAD_SAFE:
+	self.mutex.lock();
+	defer self.mutex.unlock();
+$endif
+
 	if (@unlikely(!owns_pointer(self, old_pointer)))
 	{
 		return resize_fallback_allocation(self, old_pointer, size);
@@ -197,9 +230,9 @@ fn void*? BSTAlloc.resize(&self, void* old_pointer, sz size, sz alignment) @dyna
 	}
 
 	// Allocate a new one.
-	void* new_allocation = self.acquire(size, NO_ZERO, alignment)!;
+	void* new_allocation = _acquire(self, size, NO_ZERO, alignment)!;
 	mem::copy(new_allocation, old_pointer, old_size - AllocHeader::size);
-	self.release(old_pointer, false);
+	_release(self, old_pointer);
 
 	return new_allocation;
 }
@@ -210,6 +243,18 @@ fn void*? BSTAlloc.resize(&self, void* old_pointer, sz size, sz alignment) @dyna
  @require ptr != null : "Shouldn't be null"
 *>
 fn void BSTAlloc.release(&self, void* ptr, bool) @dynamic
+{
+$if THREAD_SAFE:
+	self.mutex.lock();
+	defer self.mutex.unlock();
+$endif
+	_release(self, ptr);
+}
+
+<*
+ Non-locking 'acquire' procedure body, required for 'resize' which locks.
+*>
+macro void _release(BSTAlloc* self, void* ptr) @local
 {
 	if (!owns_pointer(self, ptr)) return;
 	FreeNode* free_node = (FreeNode*)((AllocHeader*)ptr - 1);
@@ -231,6 +276,10 @@ fn void BSTAlloc.release(&self, void* ptr, bool) @dynamic
 *>
 fn void BSTAlloc.free(&self)
 {
+$if THREAD_SAFE:
+	self.mutex.lock();
+	defer self.mutex.unlock();
+$endif
 	if (@likely(self.data != null))
 	{
 		alloc::free(self.backing_alloc, self.data);
@@ -247,6 +296,10 @@ fn void BSTAlloc.free(&self)
 *>
 fn void BSTAlloc.reset(&self)
 {
+$if THREAD_SAFE:
+	self.mutex.lock();
+	defer self.mutex.unlock();
+$endif
 	self.root = (FreeNode*)self.data;
 	init_node(self.root, self.capacity, null);
 }
@@ -259,6 +312,10 @@ fn void BSTAlloc.reset(&self)
 *>
 fn sz? BSTAlloc.to_format(&self, Formatter* fmt) @dynamic
 {
+$if THREAD_SAFE:
+	self.mutex.lock();
+	defer self.mutex.unlock();
+$endif
 	sz total = fmt.print("Binary tree allocator info:")!;
 	sz main_buff_used = 0;
 

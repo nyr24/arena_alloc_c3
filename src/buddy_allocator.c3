@@ -1,6 +1,13 @@
 module nyr_allocators::buddy;
+
+// Aliases for public use.
+alias BuddyAllocator = BuddyAlloc{false};
+alias ThreadBuddyAllocator = BuddyAlloc{true};
+
+module nyr_allocators::buddy <THREAD_SAFE>;
 import std::io;
 import std::math;
+import std::thread @norecurse;
 
 const DEFAULT_CAPACITY          @local = 4096;
 const DEFAULT_SPLIT_BOUNDARY    @local = 512;
@@ -14,7 +21,7 @@ const MIN_BLOCK_SIZE            @local = 16;
  It may use slightly more memory than other allocators because it can only store allocations sized as powers of two.
  When the allocator exhausts its memory, it falls back to its backing allocator. Fallback allocations are automatically freed when the allocator is destroyed; the user must not free them manually. Fallback allocations can also be resized.
 *>
-struct BuddyAlloc (Allocator, Printable)
+struct BuddyAlloc (Allocator, Printable) @private
 {
 	BuddyBlock* head;
 	BuddyBlock* tail;
@@ -23,6 +30,7 @@ struct BuddyAlloc (Allocator, Printable)
 	sz init_padding;
 	FallbackAlloc* fallback_head;
 	Allocator backing_alloc;
+	Mutex mutex @if(THREAD_SAFE);
 }
 
 bitstruct BuddyBlockInner : sz @local
@@ -61,6 +69,14 @@ fn void BuddyAlloc.init(
 	sz split_boundary = DEFAULT_SPLIT_BOUNDARY,
 )
 {
+	*self = {};
+
+$if THREAD_SAFE:
+	self.mutex.init()!!;
+	self.mutex.lock();
+	defer self.mutex.unlock();
+$endif
+
 	sz cap = math::next_power_of_2(init_capacity);
 	self.coalesce_boundary = max(math::next_power_of_2(coalesce_boundary), MIN_BLOCK_SIZE);
 	self.split_boundary = max(math::next_power_of_2(split_boundary), MIN_BLOCK_SIZE);
@@ -85,6 +101,10 @@ fn void BuddyAlloc.init(
 *>
 fn void BuddyAlloc.free(&self)
 {
+$if THREAD_SAFE:
+	self.mutex.lock();
+	defer self.mutex.unlock();
+$endif
 	if (@likely(self.head != null))
 	{
 		alloc::free(self.backing_alloc, (char*)self.head - self.init_padding);
@@ -101,6 +121,10 @@ fn void BuddyAlloc.free(&self)
 *>
 fn void BuddyAlloc.reset(&self)
 {
+$if THREAD_SAFE:
+	self.mutex.lock();
+	defer self.mutex.unlock();
+$endif
 	sz cap = capacity(self);
 	self.head.size = cap;
 	self.head.prev_size = 0;
@@ -117,6 +141,10 @@ fn void BuddyAlloc.reset(&self)
 *>
 fn void*? BuddyAlloc.acquire(&self, sz size, AllocInitType init_type, sz alignment) @dynamic
 {
+$if THREAD_SAFE:
+	self.mutex.lock();
+	defer self.mutex.unlock();
+$endif
 	sz req_size = calc_required_alloc_size(size, alignment);
 	return _acquire(self, req_size, init_type);
 }
@@ -127,7 +155,7 @@ fn void*? BuddyAlloc.acquire(&self, sz size, AllocInitType init_type, sz alignme
 
  @require math::is_power_of_2(size) : "Should be a power of 2"
 *>
-fn void*? _acquire(BuddyAlloc* self, sz size, AllocInitType init_type) @local
+macro void*? _acquire(BuddyAlloc* self, sz size, AllocInitType init_type) @local
 {
 	BuddyBlock* block = find_first_best_fit_block(self, size);
 
@@ -160,6 +188,11 @@ fn void*? _acquire(BuddyAlloc* self, sz size, AllocInitType init_type) @local
 *>
 fn void*? BuddyAlloc.resize(&self, void* old_pointer, sz size, sz alignment) @dynamic
 {
+$if THREAD_SAFE:
+	self.mutex.lock();
+	defer self.mutex.unlock();
+$endif
+
 	if (@unlikely(!owns_pointer(self, old_pointer)))
 	{
 		return resize_fallback_allocation(self, old_pointer, size);
@@ -173,7 +206,7 @@ fn void*? BuddyAlloc.resize(&self, void* old_pointer, sz size, sz alignment) @dy
 
 	void* new_pointer = _acquire(self, new_size, NO_ZERO)!;
 	mem::copy(new_pointer, old_pointer, min(old_size, new_size) - BuddyBlock::size);
-	self.release(old_pointer, false);
+	_release(self, old_pointer);
 	
 	return new_pointer;
 }
@@ -184,6 +217,18 @@ fn void*? BuddyAlloc.resize(&self, void* old_pointer, sz size, sz alignment) @dy
  @require ptr != null
 *>
 fn void BuddyAlloc.release(&self, void* ptr, bool) @dynamic
+{
+$if THREAD_SAFE:
+	self.mutex.lock();
+	defer self.mutex.unlock();
+$endif
+	_release(self, ptr);
+}
+
+<*
+ Non-locking body of the 'release' procedure.
+*>
+macro void _release(BuddyAlloc* self, void* ptr) @local
 {
 	if (@unlikely(!owns_pointer(self, ptr))) return;
 	BuddyBlock* block = (BuddyBlock*)ptr - 1;
@@ -570,6 +615,11 @@ fn sz calc_used_fallback_mem(BuddyAlloc* self) @local
 *>
 fn sz? BuddyAlloc.to_format(&self, Formatter* fmt) @dynamic
 {
+$if THREAD_SAFE:
+	self.mutex.lock();
+	defer self.mutex.unlock();
+$endif
+
 	BuddyBlock* block = self.head;
 	BuddyBlock* buddy = next_block(block);
 	sz total = fmt.print("Buddy Allocator state:")!;

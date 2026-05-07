@@ -65,10 +65,10 @@ import std::io;
 
 fn void fill_alloc(char[] alloc)
 {
-	uint rn = random::rand(128u);
-	uint rn2 = random::rand(128u);
+	int rn = random::rand(128);
+	int rn2 = random::rand(128);
 
-	for (uint ii = 0; ii < alloc.len; ++ii)
+	for (int ii = 0; ii < alloc.len; ++ii)
 	{
 		alloc[ii] = (ii & 1) == 0 ? (char)rn : (char)rn2;
 	}
@@ -79,7 +79,7 @@ fn void log_alloc(char[] alloc, String name = "unknown")
 	io::printfn("Alloc: %s", name);
 	for (uint i = 0; i < 3; ++i)
 	{
-		uint r_n = rand(alloc.len);
+		int r_n = rand(alloc.len);
 		io::printf("%c", alloc[r_n]);
 	}
 	io::printn();

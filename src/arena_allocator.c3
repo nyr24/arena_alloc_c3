@@ -1,6 +1,13 @@
 module nyr_allocators::arena;
+
+// Aliases for public use.
+alias Arena = ArenaAlloc{false};
+alias ThreadArena = ArenaAlloc{true};
+
+module nyr_allocators::arena <THREAD_SAFE>;
 import std::math;
 import std::io;
+import std::thread @norecurse;
 
 // Individual allocation structure: [header|payload|padding]
 
@@ -9,7 +16,7 @@ const MIN_REGION_SIZE      @local = 512;
 const DEFAULT_REGION_COUNT @local = 2; 
 const HEADER_SIZE          @local = allocators::DEFAULT_SIZE_PREFIX;
 
-struct ArenaAlloc (Allocator, Printable)
+struct ArenaAlloc (Allocator, Printable) @private
 {
 	ArenaRegion* regions;
 	ArenaRegion* last_region;
@@ -17,6 +24,7 @@ struct ArenaAlloc (Allocator, Printable)
 	sz last_region_ind;
 	sz snapshot_count;
 	sz min_region_size;
+	Mutex mutex @if(THREAD_SAFE);
 }
 
 struct ArenaRegion @local
@@ -41,18 +49,25 @@ struct ArenaSnapshot
  @require first_region_size >= MIN_REGION_SIZE : "Shouldn't be less than this"
 *>
 fn void ArenaAlloc.init(
-	&arena,
+	&self,
 	Allocator backing_alloc,
 	sz min_region_size = DEFAULT_REGION_SIZE,
 	sz first_region_size = DEFAULT_REGION_SIZE,
 )
 {
-	*arena = { };
-	arena.backing_alloc = backing_alloc;
-	arena.min_region_size = min_region_size;
+	*self = { };
+
+$if THREAD_SAFE:
+	self.mutex.init()!!;
+	self.mutex.lock();
+	defer self.mutex.unlock();
+$endif
+
+	self.backing_alloc = backing_alloc;
+	self.min_region_size = min_region_size;
 	// First region initialized here, so we don't need to check if there'is a 'head' in 'push_region' every time.
-	arena.regions = allocate_region(arena, first_region_size);
-	arena.last_region = arena.regions;
+	self.regions = allocate_region(self, first_region_size);
+	self.last_region = self.regions;
 }
 
 <*
@@ -63,12 +78,24 @@ fn void ArenaAlloc.init(
  @require size > 0 : "The size must be 1 or more"
  @return ? mem::INVALID_ALLOC_SIZE, mem::OUT_OF_MEMORY
 *>
-fn void*? ArenaAlloc.acquire(&arena, sz size, AllocInitType init_type, sz alignment = 0) @dynamic
+fn void*? ArenaAlloc.acquire(&self, sz size, AllocInitType init_type, sz alignment = 0) @dynamic
+{
+$if THREAD_SAFE:
+	self.mutex.lock();
+	defer self.mutex.unlock();
+$endif
+	return _acquire(self, size, init_type, alignment);
+}
+
+<*
+ Acquire procedure body without locking in thread safe context, needed for 'resize' call which locks.
+*>
+macro void*? _acquire(ArenaAlloc* self, sz size, AllocInitType init_type, sz alignment = 0) @local
 {
 	alignment = allocators::alignment_for_allocation(alignment);
 	sz aligned_size_with_header = mem::aligned_offset(alignment + HEADER_SIZE + size, mem::DEFAULT_MEM_ALIGNMENT);
 	sz aligned_size = aligned_size_with_header - HEADER_SIZE;
-	ArenaRegion* curr = arena.snapshot_count > 0 ? arena.last_region : arena.regions;
+	ArenaRegion* curr = self.snapshot_count > 0 ? self.last_region : self.regions;
 	ArenaRegion* sufficient_reg = null;
 
 	while (curr)
@@ -78,14 +105,15 @@ fn void*? ArenaAlloc.acquire(&arena, sz size, AllocInitType init_type, sz alignm
 			sufficient_reg = curr;
 			break;
 		}
+		curr = curr.next;
 	}
 
 	if (!sufficient_reg)
 	{
-		sufficient_reg = push_region(arena, aligned_size_with_header);
+		sufficient_reg = push_region(self, aligned_size_with_header);
 	}
 
-	return finalize_alloc(arena, sufficient_reg, aligned_size, alignment, init_type);
+	return finalize_alloc(self, sufficient_reg, aligned_size, alignment, init_type);
 }
 
 <*
@@ -97,10 +125,15 @@ fn void*? ArenaAlloc.acquire(&arena, sz size, AllocInitType init_type, sz alignm
  @require new_size > 0
  @return ? mem::INVALID_ALLOC_SIZE, mem::OUT_OF_MEMORY
 *>
-fn void*? ArenaAlloc.resize(&arena, void* ptr, sz new_size, sz alignment = 0) @dynamic
+fn void*? ArenaAlloc.resize(&self, void* ptr, sz new_size, sz alignment = 0) @dynamic
 {
+$if THREAD_SAFE:
+	self.mutex.lock();
+	defer self.mutex.lock();
+$endif
+
 	sz aligned_new_size = mem::aligned_offset(new_size, mem::DEFAULT_MEM_ALIGNMENT);
-	ArenaRegion* curr = arena.regions;
+	ArenaRegion* curr = self.regions;
 	ArenaRegion* reg = null;
 
 	while (curr)
@@ -110,6 +143,7 @@ fn void*? ArenaAlloc.resize(&arena, void* ptr, sz new_size, sz alignment = 0) @d
 			reg = curr;
 			break;
 		}
+		curr = curr.next;
 	}
 
 	assert(reg != null, "Pointer isn't managed by this allocator");
@@ -141,13 +175,13 @@ fn void*? ArenaAlloc.resize(&arena, void* ptr, sz new_size, sz alignment = 0) @d
 		if (enough_place_at_end)
 		{
 			sz aligned_size = aligned_size_with_header - HEADER_SIZE;
-			void* ret = finalize_alloc(arena, reg, aligned_size, alignment, NO_ZERO);
+			void* ret = finalize_alloc(self, reg, aligned_size, alignment, NO_ZERO);
 			mem::copy((char*)ret, (char*)ptr, math::min(*old_size, new_size));
 			return ret;
 		}
 	}
 
-	void* ret = arena.acquire(new_size, NO_ZERO, alignment)!;
+	void* ret = _acquire(self, new_size, NO_ZERO, alignment)!;
 	mem::copy((char*)ret, (char*)ptr, math::min(*old_size, new_size));
 	return ret;
 }
@@ -155,13 +189,17 @@ fn void*? ArenaAlloc.resize(&arena, void* ptr, sz new_size, sz alignment = 0) @d
 <*
  Release memory acquired using `acquire` or `resize`.
  It is not a good practice to free individual pointers from arena
- Consider using snapshots, @temp_scope, or resetting whole arena.
+ Consider using snapshots, @temp_scope, or resetting whole self.
 
  @require ptr != null : "Empty pointers should never be released"
 *>
-fn void ArenaAlloc.release(&arena, void* ptr, bool) @dynamic
+fn void ArenaAlloc.release(&self, void* ptr, bool) @dynamic
 {
-	ArenaRegion* curr = arena.regions;
+$if THREAD_SAFE:
+	self.mutex.lock();
+	defer self.mutex.unlock();
+$endif
+	ArenaRegion* curr = self.regions;
 	ArenaRegion* reg = null;
 
 	while (curr)
@@ -171,6 +209,7 @@ fn void ArenaAlloc.release(&arena, void* ptr, bool) @dynamic
 			reg = curr;
 			break;
 		}
+		curr = curr.next;
 	}
 
 	assert(reg, "Pointer isn't managed by this allocator");
@@ -187,12 +226,16 @@ fn void ArenaAlloc.release(&arena, void* ptr, bool) @dynamic
  Create a 'mark' from which you can start doing temporary allocations,
  then easily reclaim them back with 'rewind_snapshot'
 *>
-fn ArenaSnapshot ArenaAlloc.create_snapshot(&arena)
+fn ArenaSnapshot ArenaAlloc.create_snapshot(&self)
 {
+$if THREAD_SAFE:
+	self.mutex.lock();
+	defer self.mutex.unlock();
+$endif
 	ArenaSnapshot snap;
-	snap.region = arena.last_region;
-	snap.cursor = arena.last_region.cursor;
-	arena.snapshot_count++;
+	snap.region = self.last_region;
+	snap.cursor = self.last_region.cursor;
+	self.snapshot_count++;
 	return snap;
 }
 
@@ -201,9 +244,13 @@ fn ArenaSnapshot ArenaAlloc.create_snapshot(&arena)
 
  @require snapshot.region != null : "Shouldn't be null"
 *>
-fn void ArenaAlloc.rewind_snapshot(&arena, ArenaSnapshot snapshot)
+fn void ArenaAlloc.rewind_snapshot(&self, ArenaSnapshot snapshot)
 {
-	ArenaRegion* curr = arena.last_region;
+$if THREAD_SAFE:
+	self.mutex.lock();
+	defer self.mutex.unlock();
+$endif
+	ArenaRegion* curr = self.last_region;
 
 	while (curr && curr != snapshot.region)
 	{
@@ -213,26 +260,30 @@ fn void ArenaAlloc.rewind_snapshot(&arena, ArenaSnapshot snapshot)
 
 	assert(curr != null && curr == snapshot.region, "Should be provided region");
 	curr.cursor = snapshot.cursor;
-	arena.last_region = curr;
-	arena.snapshot_count--;
+	self.last_region = curr;
+	self.snapshot_count--;
 }
 
 <*
  Create a temporary allocation scope, all allocated memory will be freed at the end of this scope.
 *>
-macro ArenaAlloc.@temp_scope(&arena; @body(Allocator alloc))
+macro ArenaAlloc.@temp_scope(&self; @body(Allocator alloc))
 {
-	ArenaSnapshot sn = arena.create_snapshot();
-	defer arena.rewind_snapshot(sn);
-	@body(arena);
+	ArenaSnapshot sn = self.create_snapshot();
+	defer self.rewind_snapshot(sn);
+	@body(self);
 }
 
 <*
  Reclaim all used memory, allowing for reuse.
 *>
-fn void ArenaAlloc.reset(&arena)
+fn void ArenaAlloc.reset(&self)
 {
-	ArenaRegion* curr = arena.regions;
+$if THREAD_SAFE:
+	self.mutex.lock();
+	defer self.mutex.unlock();
+$endif
+	ArenaRegion* curr = self.regions;
 
 	while (curr)
 	{
@@ -240,28 +291,32 @@ fn void ArenaAlloc.reset(&arena)
 		curr = curr.next;
 	}
 
-	arena.last_region = arena.regions;
+	self.last_region = self.regions;
 }
 
 <*
  Free all the memory storage of arena and return it to backing allocator.
 
- @require arena.regions != null : "Should be initialized"
+ @require self.regions != null : "Should be initialized"
 *>
-fn void ArenaAlloc.free(&arena)
+fn void ArenaAlloc.free(&self)
 {
-	ArenaRegion* curr = arena.regions;
+$if THREAD_SAFE:
+	self.mutex.lock();
+	defer self.mutex.unlock();
+$endif
+	ArenaRegion* curr = self.regions;
 	ArenaRegion* next = null;
 
  	while (curr)
 	{
 		next = curr.next;
-		alloc::free(arena.backing_alloc, curr);
+		alloc::free(self.backing_alloc, curr);
 		curr = next;
 	}
 
-	arena.regions = null;
-	arena.last_region = null;
+	self.regions = null;
+	self.last_region = null;
 }
 
 <*
@@ -269,18 +324,26 @@ fn void ArenaAlloc.free(&arena)
 
  @require min_size >= MIN_REGION_SIZE : "Should be greater than min"
 *>
-fn void ArenaAlloc.set_min_region_size(&arena, sz min_size) @inline
+fn void ArenaAlloc.set_min_region_size(&self, sz min_size) @inline
 {
-	arena.min_region_size = min_size;
+$if THREAD_SAFE:
+	self.mutex.lock();
+	defer self.mutex.unlock();
+$endif
+	self.min_region_size = min_size;
 }
 
 <*
  Implements 'Printable' interface.
 *>
-fn sz? ArenaAlloc.to_format(&arena, Formatter* fmt) @dynamic
+fn sz? ArenaAlloc.to_format(&self, Formatter* fmt) @dynamic
 {
+$if THREAD_SAFE:
+	self.mutex.lock();
+	defer self.mutex.unlock();
+$endif
 	sz total = fmt.print("Arena allocator info: [cursor : capacity]")!;
-	ArenaRegion* curr = arena.regions;
+	ArenaRegion* curr = self.regions;
 
 	while (curr)
 	{
@@ -297,7 +360,7 @@ fn sz? ArenaAlloc.to_format(&arena, Formatter* fmt) @dynamic
  Insert allocation after region.cursor.
 *>
 fn void* finalize_alloc(
-	ArenaAlloc* arena,
+	ArenaAlloc* self,
 	ArenaRegion* reg,
 	sz aligned_size,
 	sz alignment,
@@ -317,13 +380,13 @@ fn void* finalize_alloc(
 }
 
 <*
- Add new region to the arena.
+ Add new region to the self.
 
- @require arena.last_region != null : "Shouldn't be null"
+ @require self.last_region != null : "Shouldn't be null"
 *>
-fn ArenaRegion* push_region(ArenaAlloc* arena, sz size) @local
+fn ArenaRegion* push_region(ArenaAlloc* self, sz size) @local
 {
-	ArenaRegion* curr = arena.last_region;
+	ArenaRegion* curr = self.last_region;
 	ArenaRegion* prev = curr;
 
 	while (curr)
@@ -334,22 +397,22 @@ fn ArenaRegion* push_region(ArenaAlloc* arena, sz size) @local
 
 	assert(prev, "Shouldn't be null");
 
-	curr = allocate_region(arena, size);
+	curr = allocate_region(self, size);
 	curr.prev = prev;
 	prev.next = curr;
 
-	arena.last_region = curr;
+	self.last_region = curr;
 	return curr;
 }
 
 <*
  Allocate new arena region.
 *>
-fn ArenaRegion* allocate_region(ArenaAlloc* arena, sz size) @local
+fn ArenaRegion* allocate_region(ArenaAlloc* self, sz size) @local
 {
-	sz cap = math::max(size, arena.min_region_size);
+	sz cap = math::max(size, self.min_region_size);
 	sz aligned_cap = mem::aligned_offset(cap, mem::DEFAULT_MEM_ALIGNMENT);
-	ArenaRegion* reg = alloc::alloc_with_padding(arena.backing_alloc, ArenaRegion, aligned_cap)!!;
+	ArenaRegion* reg = alloc::alloc_with_padding(self.backing_alloc, ArenaRegion, aligned_cap)!!;
 	reg.capacity = aligned_cap;
 	reg.cursor = 0;
 	reg.next = null;
@@ -362,7 +425,7 @@ fn ArenaRegion* allocate_region(ArenaAlloc* arena, sz size) @local
 *>
 fn bool owns_ptr(ArenaRegion* reg, void* ptr) @inline @local
 {
-	return ((uptr)ptr >= (uptr)&reg.memory) && ((uptr)ptr < ((uptr)&reg.memory + reg.capacity));
+	return ((char*)ptr >= (char*)&reg.memory) && ((char*)ptr < ((char*)&reg.memory + reg.capacity));
 }
 
 <*
