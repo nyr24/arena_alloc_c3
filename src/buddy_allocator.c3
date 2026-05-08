@@ -1,10 +1,10 @@
-module nyr_allocators::buddy;
+module custom_allocators::buddy;
 
 // Aliases for public use.
 alias BuddyAllocator = BuddyAlloc{false};
 alias ThreadBuddyAllocator = BuddyAlloc{true};
 
-module nyr_allocators::buddy <THREAD_SAFE>;
+module custom_allocators::buddy <THREAD_SAFE>;
 import std::io;
 import std::math;
 import std::thread @norecurse;

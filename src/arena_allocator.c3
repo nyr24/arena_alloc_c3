@@ -1,10 +1,10 @@
-module nyr_allocators::arena;
+module custom_allocators::arena;
 
 // Aliases for public use.
 alias Arena = ArenaAlloc{false};
 alias ThreadArena = ArenaAlloc{true};
 
-module nyr_allocators::arena <THREAD_SAFE>;
+module custom_allocators::arena <THREAD_SAFE>;
 import std::math;
 import std::io;
 import std::thread @norecurse;

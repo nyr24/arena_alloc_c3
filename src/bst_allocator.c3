@@ -1,10 +1,10 @@
-module nyr_allocators::bst;
+module custom_allocators::bst;
 
 // Aliases for public use.
 alias BSTAllocator = BSTAlloc{false};
 alias ThreadBSTAllocator = BSTAlloc{true};
 
-module nyr_allocators::bst <THREAD_SAFE>;
+module custom_allocators::bst <THREAD_SAFE>;
 import std::io;
 import std::math;
 import std::thread @norecurse;
