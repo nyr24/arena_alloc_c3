@@ -10,7 +10,7 @@ import std::atomic;
 
 fn void task_background(TaskData task) 
 {
-	String f_name = *(String*)task.arg;
+	String f_name = *(String*)task.data;
 
 	ThreadArena* arena = (ThreadArena*)task.alloc;
 
@@ -69,16 +69,26 @@ fn int next_prime(int x)
 
 fn void task_computation(TaskData task) 
 {
-	int start = *(int*)task.arg;
+	int start = *(int*)task.data;
 	int next_p = next_prime(start);
 }
 
-fn void thread_pool_test() @test
+const String[*] FILE_NAMES = {
+	"resources/input0.txt",
+	"resources/input1.txt",
+	"resources/input2.txt",
+	"resources/input3.txt",
+	"resources/input4.txt",
+	"resources/input5.txt",
+	"resources/input6.txt",
+};
+
+fn void general() @test
 {
 	ThreadArena thread_alloc;
 	thread_alloc.init(mem, 1ull << 32);
 
-	ThreadPool{8, 1} pool;
+	ThreadPool{8, 4} pool;
 	pool.init()!!;
 
 	defer {
@@ -99,7 +109,7 @@ fn void thread_pool_test() @test
 	foreach (i, &task : compute_tasks)
 	{
 		task.func = &task_computation;
-		task.arg = (void*)&primes[i];
+		task.data = (void*)&primes[i];
 		task.alloc = &thread_alloc;
 		task.priority = HIGH;
 	}
@@ -110,7 +120,7 @@ fn void thread_pool_test() @test
 	foreach (i, &task : io_tasks)
 	{
 		task.func = &task_background;
-		task.arg = (void*)&f_name;
+		task.data = (void*)&FILE_NAMES[random::rand(FILE_NAMES.len)];
 		task.alloc = &thread_alloc;
 		task.priority = HIGH;
 	}
