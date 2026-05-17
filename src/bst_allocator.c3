@@ -260,6 +260,13 @@ macro void _release(BstAlloc* self, void* ptr) @local
 	if (!owns_pointer(self, ptr)) return;
 	FreeNode* free_node = (FreeNode*)((AllocHeader*)ptr - 1);
 
+	// This is because 'mem::malloc_try' will do this:
+	// mem::set(data, 0xAA, size, mem::DEFAULT_MEM_ALIGNMENT);
+	// So this will write into one of our links in the debug mode.
+	$if env::TESTING:
+	zero_node_links(free_node);
+	$endif
+
 	// Prevent double free.
 	if (@unlikely(free_node.is_free)) return;
 
